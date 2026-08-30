@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: approvals-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: approvals
+      POSTGRES_PASSWORD: approvals
+      POSTGRES_DB: approvals
+    ports:
+      - "5432:5432"
+    volumes:
+      - approvals_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U approvals -d approvals"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  approvals_pgdata:

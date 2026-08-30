@@ -1,0 +1,28 @@
+{
+  "name": "approvals-app",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "setup": "node scripts/run-setup.mjs",
+    "dev": "node scripts/run-dev.mjs",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate": "npm run prisma:migrate --workspace=backend",
+    "db:seed": "npm run prisma:seed --workspace=backend",
+    "gmail:auth": "npm run gmail:auth --workspace=backend",
+    "db:setup": "powershell -ExecutionPolicy Bypass -File ./scripts/setup-postgres.ps1",
+    "db:deploy": "npm run prisma:deploy --workspace=backend",
+    "share:check": "npm install && npm run prisma:generate --workspace=backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "optionalDependencies": {
+    "@esbuild/win32-x64": "^0.28.2"
+  }
+}
