@@ -29,12 +29,13 @@ export class EmployeeService {
     employeeId: number,
     email: string,
     name: string,
-    role: UserRole
+    role: UserRole,
+    passwordHash: string
   ) {
     return prisma.employee.upsert({
       where: { employeeId },
-      create: { employeeId, email, name, role, isActive: true, lastLoginAt: new Date() },
-      update: { email, name, role, isActive: true, lastLoginAt: new Date() },
+      create: { employeeId, email, name, role, passwordHash, isActive: true, lastLoginAt: new Date() },
+      update: { email, name, role, passwordHash, isActive: true, lastLoginAt: new Date() },
     });
   }
 }

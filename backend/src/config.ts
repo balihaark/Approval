@@ -78,6 +78,9 @@ export const config = {
   frontendUrl: optional("FRONTEND_URL", "http://localhost:3000"),
   corsOrigin: optional("CORS_ORIGIN"),
   jwtSecret,
+  loginAuthJwtSecret: optional("LOGIN_AUTH_JWT_SECRET", jwtSecret),
+  loginAuthIssuer: optional("LOGIN_AUTH_ISSUER"),
+  loginAuthAudience: optional("LOGIN_AUTH_AUDIENCE"),
   databaseUrl: required(
     "DATABASE_URL",
     "postgresql://approvals:approvals@localhost:5432/approvals"

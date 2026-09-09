@@ -1,109 +1,99 @@
-# Approvals App — Phase 1 MVP
+# BlauPlug Approvals
 
-Internal approval tracker for **BlauPlug Innovations Pvt. Ltd.** Employees send approval requests by email and CC a **monitoring inbox** (your `GMAIL_USER`). This app ingests those messages via the **Gmail API**, turns them into structured records, and lets approvers **Approve / Reject in the web app**. The decision is then sent back as a **reply on the original Gmail thread**.
+Internal approval workflow: approval emails are read from a monitored Gmail inbox, routed to approvers in sequence, and the final decision is sent as a reply in the original Gmail thread.
 
-There is **no Microsoft Graph / Exchange / Entra** integration.
+This repository is ready to run locally without any organisation credentials. Gmail and Login-Auth SSO are optional integrations: add their URLs and credentials to the untracked environment files when those services are ready.
 
-## Quick start (local Postgres — no Docker)
+## Start locally
 
-**Prerequisites:** [Node.js 20+](https://nodejs.org), [PostgreSQL 16+](https://www.postgresql.org/download/), [Git](https://git-scm.com)
+Prerequisites: Node.js 20+, PostgreSQL 16+, and Git.
 
 ```powershell
-# 1. Create app database (Windows — use your postgres superuser password)
-.\scripts\setup-postgres.ps1 -PostgresPassword "YOUR_POSTGRES_SUPERUSER_PASSWORD"
-
-# 2. Install, migrate, seed admin
-npm run setup
-
-# 3. Run (every time)
-npm run dev
-```
-
-Open **http://localhost:3000** — admin `admin@blauplug.local` / `ChangeMe123!`
-
-**Full clone guide:** **[SETUP.md](SETUP.md)** · **Your own secrets & Gmail:** **[docs/ENV_SETUP.md](docs/ENV_SETUP.md)**
-
----
-
-## Manual setup (same idea, step by step)
-
-1. Install Node 20+ and PostgreSQL. Remember the `postgres` superuser password. Start the PostgreSQL service.
-
-2. Clone and create the app DB:
-
-```bash
-git clone <repo-url>
+git clone <repository-url>
 cd approval
-```
-
-```powershell
 .\scripts\setup-postgres.ps1 -PostgresPassword "YOUR_POSTGRES_SUPERUSER_PASSWORD"
-```
-
-3. Env files are created by `npm run setup` (or copy manually):
-
-```bash
-copy .env.example .env
-copy .env.example backend\.env
-copy frontend\.env.local.example frontend\.env.local
-```
-
-Default `DATABASE_URL` (matches the script above):
-
-```
-DATABASE_URL=postgresql://approvals:approvals@localhost:5432/approvals
-```
-
-4. Install, migrate, seed, run:
-
-```bash
-npm install
-cd backend && npx prisma migrate deploy && npx prisma db seed && cd ..
+npm run setup
 npm run dev
 ```
 
-Or use `npm run setup` then `npm run dev`.
+Open http://localhost:3000. The API health check is http://localhost:3001/health.
 
-- Web app: http://localhost:3000  
-- API: http://localhost:3001/health  
+`npm run setup` installs dependencies, creates missing environment files, applies Prisma migrations, and seeds local accounts. It does not overwrite existing environment files.
 
-Bootstrap admin (change password after first login):
+Local accounts:
 
-| Email | Role |
-|---|---|
-| `admin@blauplug.local` | Admin |
+| Account | Password | Role |
+|---|---|---|
+| `admin@blauplug.local` | `ChangeMe123!` | Admin |
+| `balihaar.kaur@blauplug.com` | `Balihaar21123` | User |
+| `abbas.shaikh@blauplug.com` | `Balihaar21123` | User |
+| `shreya.kumar@blauplug.com` | `Balihaar21123` | User |
+| `chandana.rama@blauplug.com` | `Balihaar21123` | User |
 
-Create real org users under **Admin → People** using their work Gmail / company emails (must match From / To / CC on approval mail).
+Change the bootstrap admin password after its first login. Do not use these seeded accounts in a shared or production environment.
 
-To wipe demo seed data from an older install:
+## Configuration handoff
 
-```bash
-cd backend
-npm run data:clear-seed
+Credentials are deliberately not committed. Copy the examples (or run `npm run setup`) and put real values only in these ignored files:
+
+| File | Used by | Contents |
+|---|---|---|
+| `.env` | project scripts | Copy of backend settings |
+| `backend/.env` | Approvals API | database, session secret, Gmail, SSO verification |
+| `frontend/.env.local` | Approvals browser app | API and Login-Auth browser URLs |
+
+Keep `.env` and `backend/.env` identical for shared backend settings. Never commit them, Gmail OAuth tokens, JWT secrets, Central DB keys, or SMS credentials.
+
+### Minimum settings
+
+The generated defaults run the app against local PostgreSQL. Before deployment, set a production `DATABASE_URL`, a unique 32+ character `JWT_SECRET`, `FRONTEND_URL`, and `NODE_ENV=production` in both `.env` and `backend/.env`.
+
+### Login-Auth SSO
+
+Local password login continues to work even if Login-Auth is unavailable. To turn on the Sign in with Login-Auth button, set this in `frontend/.env.local`:
+
+```dotenv
+NEXT_PUBLIC_LOGIN_AUTH_URL=https://login-auth.example.com
 ```
 
-To share the repo, see **[SHARE.md](SHARE.md)**. Teammates clone and create their own credentials via **[docs/ENV_SETUP.md](docs/ENV_SETUP.md)** — never commit `.env` or tokens.
+Login-Auth must redirect the browser back to:
 
-Admins manage Gmail connection and unprocessed mail under **Gmail** / **Unprocessed**.
+```text
+https://approvals.example.com/sso/callback?token=<signed-JWT>
+```
 
-Security controls (sessions, lockout, password policy, CSRF, webhooks): see **[docs/SECURITY.md](docs/SECURITY.md)**.
+In `.env` and `backend/.env`, configure the JWT verification contract:
 
-## What Phase 1 includes
+```dotenv
+LOGIN_AUTH_JWT_SECRET=<same-HS256-secret-used-by-Login-Auth>
+LOGIN_AUTH_ISSUER=<optional-expected-issuer>
+LOGIN_AUTH_AUDIENCE=<optional-expected-audience>
+```
 
-- Gmail OAuth2 for a single monitoring mailbox (`GMAIL_USER`)
-- Push ingestion via Google Cloud Pub/Sub (`users.watch`) + webhook
-- Reconciliation sweep (`users.history.list` / `users.messages.list`)
-- Threading / dedup on Gmail `threadId` + Message-ID
-- Sent / Received / Part-of dashboards, search & filter
-- In-app Approve / Reject (reason required on reject) + threaded Gmail reply
-- Append-only activity log; party-only access at the API (admin override)
-- Quarantine queue for mail that does not parse as an approval
+The token must contain the employee email. `emp_id` (or `central_emp_id`), `first_name`, and an approvals/admin role are supported when supplied. Confirm the signing algorithm, secret/key distribution, issuer, audience, callback URL, and logout policy with the Login-Auth owner before production cutover. The current implementation verifies HS256 tokens.
 
-## Deploy sketch (AWS)
+### Gmail
 
-- Frontend: Amplify (Next.js)
-- Backend: EC2 (or ECS) running the Fastify API
-- Database: RDS PostgreSQL (managed — not Docker Desktop)
-- Secrets: store `JWT_SECRET`, `GOOGLE_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` in Secrets Manager / SSM — never in the image
+Gmail is optional until the organisation wants email ingestion and replies. Add the Google OAuth client values, monitoring inbox, refresh token, and optionally Pub/Sub push values to `.env` and `backend/.env`. The complete copy-and-paste guide is [docs/ENV_SETUP.md](docs/ENV_SETUP.md).
 
-See **[docs/ENV_SETUP.md](docs/ENV_SETUP.md)** for step-by-step credentials (OAuth, refresh token, Pub/Sub, where to paste each value). Technical reference: **[docs/GMAIL_SETUP.md](docs/GMAIL_SETUP.md)** and **[docs/NGROK_SETUP.md](docs/NGROK_SETUP.md)**.
+For a local Gmail test without a public webhook, set `GMAIL_RECONCILE_MINUTES=1`; the app polls the inbox. For instant push delivery, configure a public HTTPS endpoint and `GMAIL_PUSH_TOKEN` as documented in the guide.
+
+## Useful commands
+
+```powershell
+npm run dev
+npm run db:deploy
+npm run db:seed
+npm run build --workspace=backend
+npm run build --workspace=frontend
+npm run gmail:auth
+npm run gmail:verify --workspace=backend
+```
+
+## More documentation
+
+- [SETUP.md](SETUP.md) - local PostgreSQL and installation details
+- [HANDOFF.md](HANDOFF.md) - ownership boundaries, Central DB contract, and SSO cutover notes
+- [docs/ENV_SETUP.md](docs/ENV_SETUP.md) - Gmail, Google Cloud, Pub/Sub, and ngrok setup
+- [database/README.md](database/README.md) - database ownership and setup
+- [docs/SECURITY.md](docs/SECURITY.md) - security controls and deployment hardening

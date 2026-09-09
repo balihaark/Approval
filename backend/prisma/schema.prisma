@@ -30,17 +30,23 @@ enum DecisionOutcome {
   REJECTED
 }
 
-// Identity is owned by Login-Auth. This is only the local employee projection;
-// it deliberately contains no password or MFA fields.
+// Identity projection from Login-Auth (future SSO integration).
+// NOT used for login right now — login goes through the User table above.
+// Keep this model in place as groundwork for the planned Employee/SSO integration.
 model Employee {
-  employeeId  Int      @id
-  email       String   @unique
-  name        String
-  role        UserRole @default(USER)
-  isActive    Boolean  @default(true)
-  lastLoginAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  employeeId          Int      @id
+  email               String   @unique
+  name                String
+  passwordHash        String
+  role                UserRole @default(USER)
+  isActive            Boolean  @default(true)
+  tokenVersion        Int      @default(0)
+  failedLoginAttempts Int      @default(0)
+  lockedUntil         DateTime?
+  mustChangePassword  Boolean  @default(false)
+  lastLoginAt         DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 }
 
 model Approval {
@@ -59,6 +65,7 @@ model Approval {
   updatedAt      DateTime       @updatedAt
   parties        Party[]
   decisions      Decision[]
+  activityLogs   ActivityLog[]
 
   @@index([state])
   @@index([department])
@@ -68,11 +75,11 @@ model Approval {
 }
 
 model Party {
-  id         String    @id @default(uuid())
-  approvalId String
-  approval   Approval  @relation(fields: [approvalId], references: [id], onDelete: Cascade)
-  email      String
-  name       String?
+  id            String    @id @default(uuid())
+  approvalId    String
+  approval      Approval  @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+  email         String
+  name          String?
   role          PartyRole
   sequenceOrder Int?
   createdAt     DateTime  @default(now())
@@ -92,6 +99,19 @@ model Decision {
   decidedAt  DateTime         @default(now())
 
   @@index([approvalId])
+}
+
+model ActivityLog {
+  id         String    @id @default(uuid())
+  approvalId String?
+  approval   Approval? @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+  actorEmail String
+  action     String
+  details    Json?
+  createdAt  DateTime  @default(now())
+
+  @@index([approvalId])
+  @@index([createdAt])
 }
 
 model UnprocessedMail {

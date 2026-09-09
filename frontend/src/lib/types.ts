@@ -1,5 +1,5 @@
 export type User = {
-  id: number | string;
+  id: string;
   email: string;
   name: string;
   role: "USER" | "ADMIN";
@@ -59,4 +59,16 @@ export type UnprocessedMail = {
   createdAt: string;
   resolvedAt: string | null;
   resolvedBy: string | null;
+};
+
+export type AdminUser = {
+  id: string;
+  email: string;
+  name: string;
+  role: "USER" | "ADMIN";
+  isActive: boolean;
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
+  lockedUntil: string | null;
+  createdAt: string;
 };

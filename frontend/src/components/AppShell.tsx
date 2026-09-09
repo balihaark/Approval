@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
@@ -30,6 +31,7 @@ const PRIMARY_NAV: NavItem[] = [
 
 const ADMIN_NAV: NavItem[] = [
   { href: "/all", label: "All approvals", icon: LayoutList },
+  { href: "/admin/users", label: "People", icon: Users },
   { href: "/admin/unprocessed", label: "Unprocessed", icon: ShieldAlert },
   { href: "/admin/gmail", label: "Gmail", icon: Mail },
 ];
@@ -136,7 +138,13 @@ function SidebarContent({
         }`}
       >
         <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded">
-          <img src="/brand-mark.png" alt="BlauPlug" className="h-full w-full object-contain" />
+          <Image
+            src="/brand-mark.png"
+            alt="BlauPlug"
+            width={28}
+            height={28}
+            className="h-full w-full object-contain"
+          />
         </div>
         {isExpanded && (
           <div className="min-w-0">

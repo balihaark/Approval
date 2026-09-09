@@ -30,6 +30,15 @@ export default function LoginPage() {
     }
   }
 
+  function onSsoClick() {
+    const loginAuthUrl =
+      process.env.NEXT_PUBLIC_LOGIN_AUTH_URL || "http://localhost:3002";
+    const returnUrl = encodeURIComponent(
+      `${window.location.origin}/sso/callback`
+    );
+    window.location.assign(`${loginAuthUrl}?returnUrl=${returnUrl}`);
+  }
+
   if (loading || user) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas">
@@ -59,6 +68,22 @@ export default function LoginPage() {
           onSubmit={onSubmit}
           className="rounded-lg border border-line bg-surface p-6 shadow-card"
         >
+          <Button
+            type="button"
+            variant="secondary"
+            size="lg"
+            className="w-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+            onClick={onSsoClick}
+          >
+            Sign in with Login-Auth
+          </Button>
+
+          <div className="my-4 flex items-center gap-3">
+            <div className="h-px flex-1 bg-slate-200" />
+            <span className="text-xs font-medium text-slate-400">OR</span>
+            <div className="h-px flex-1 bg-slate-200" />
+          </div>
+
           <div className="space-y-4">
             <Field label="Work email">
               <Input

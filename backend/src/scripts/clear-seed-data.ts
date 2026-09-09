@@ -40,6 +40,9 @@ async function main() {
     await prisma.decision.deleteMany({
       where: { approvalId: { in: seedApprovalIds } },
     });
+    await prisma.activityLog.deleteMany({
+      where: { approvalId: { in: seedApprovalIds } },
+    });
     await prisma.party.deleteMany({
       where: { approvalId: { in: seedApprovalIds } },
     });
@@ -57,7 +60,7 @@ async function main() {
     },
   });
 
-  const employees = await prisma.employee.deleteMany({
+  const users = await prisma.employee.deleteMany({
     where: { email: { in: SEED_USER_EMAILS } },
   });
 
@@ -71,10 +74,10 @@ async function main() {
       {
         removedSeedApprovals: seedApprovals.map((a) => a.threadId),
         removedUnprocessed: unprocessed.count,
-        removedEmployees: employees.count,
+        removedUsers: users.count,
         remainingAdmin: Boolean(admin),
         remainingApprovals: await prisma.approval.count(),
-        remainingEmployees: await prisma.employee.count(),
+        remainingUsers: await prisma.employee.count(),
       },
       null,
       2

@@ -1,4 +1,4 @@
-import type { ActivityItem, Approval, UnprocessedMail, User } from "./types";
+import type { Approval, ActivityItem, UnprocessedMail, User } from "./types";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "/api";
 
@@ -64,15 +64,15 @@ export async function api<T>(
   return data as T;
 }
 
-export function login(email: string, password?: string) {
-  return api<{ ok: boolean; user: User }>("/auth/login", {
+export function login(email: string, password: string) {
+  return api<{ user: User }>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
 }
 
-export function establishSsoSession(token: string) {
-  return api<{ ok: boolean }>("/auth/session", {
+export function ssoCallback(token: string) {
+  return api<{ user: User }>("/auth/sso/callback", {
     method: "POST",
     body: JSON.stringify({ token }),
   });
@@ -87,48 +87,9 @@ export function me() {
 }
 
 export function changePassword(currentPassword: string, newPassword: string) {
-  return api<{ ok: boolean; user: User }>("/auth/change-password", {
+  return api<{ user: User }>("/auth/change-password", {
     method: "POST",
     body: JSON.stringify({ currentPassword, newPassword }),
-  });
-}
-
-export function getActivity(approvalId: string) {
-  return api<{ items: ActivityItem[] }>(`/approvals/${approvalId}/activity`);
-}
-
-export type AppUser = {
-  id: string;
-  email: string;
-  name: string;
-  role: "USER" | "ADMIN";
-  isActive: boolean;
-  mustChangePassword: boolean;
-  lastLoginAt: string | null;
-  lockedUntil: string | null;
-  createdAt: string;
-};
-
-export function listUsers() {
-  return api<{ items: AppUser[] }>("/admin/users");
-}
-
-export function createUser(payload: {
-  email: string;
-  name: string;
-  password?: string;
-  role: "USER" | "ADMIN";
-}) {
-  return api<AppUser>("/admin/users", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function patchUser(id: string, patch: { isActive?: boolean; role?: "USER" | "ADMIN"; name?: string }) {
-  return api<AppUser>(`/admin/users/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(patch),
   });
 }
 
@@ -171,6 +132,10 @@ export function createApproval(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function getActivity(id: string) {
+  return api<{ items: ActivityItem[] }>(`/approvals/${id}/activity`);
 }
 
 export function decide(
@@ -228,6 +193,49 @@ export function gmailWatch() {
 
 export function startGmailOauth() {
   return api<{ url: string }>("/gmail/oauth/start");
+}
+
+export function listUsers() {
+  return api<{
+    items: {
+      id: string;
+      email: string;
+      name: string;
+      role: "USER" | "ADMIN";
+      isActive: boolean;
+      mustChangePassword: boolean;
+      lastLoginAt: string | null;
+      lockedUntil: string | null;
+      createdAt: string;
+    }[];
+  }>("/admin/users");
+}
+
+export function createUser(payload: {
+  email: string;
+  name: string;
+  password: string;
+  role?: "USER" | "ADMIN";
+}) {
+  return api("/admin/users", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function patchUser(
+  id: string,
+  payload: {
+    isActive?: boolean;
+    role?: "USER" | "ADMIN";
+    mustChangePassword?: boolean;
+    resetPassword?: string;
+  }
+) {
+  return api(`/admin/users/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function adminStats() {
