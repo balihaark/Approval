@@ -1,11 +1,11 @@
-# Manager handoff
+
 
 ## Repository layout
 
 - `backend/` — Approvals API and Prisma migrations.
 - `frontend/` — Approvals web application.
 - `database/` — database ownership and setup guide.
-- `login-auth/` — local reference checkout of the separate manager-owned Login-Auth repository. It is intentionally ignored and is not part of this repository.
+- `login-auth/` — local reference checkout of the separate Login-Auth repository. It is intentionally ignored and is not part of this repository.
 
 ## Local approvals run
 
@@ -16,7 +16,7 @@
 
 ## Login-Auth run with mock SMS
 
-1. Clone the manager-owned Login-Auth repository separately, then copy its `backend/.env.example` to `backend/.env`.
+1. Clone the Login-Auth repository separately, then copy its `backend/.env.example` to `backend/.env`.
 2. Use a dedicated Login-Auth database, not the approvals database.
 3. Set `MSG91_MOCK=true` and set `MSG91_API_KEY`, `MSG91_TEMPLATE_ID`, and `MSG91_SENDER_ID` to non-empty placeholder values such as `mock`. The current Login-Auth startup validation requires them even in mock mode.
 4. Configure `CENTRAL_DB_URL` and `CENTRAL_DB_API_KEY` when the Central DB service is available.
