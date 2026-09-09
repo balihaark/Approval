@@ -10,7 +10,6 @@ for (const file of [
 }
 
 import { PrismaClient, UserRole } from "@prisma/client";
-import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
@@ -21,17 +20,15 @@ const prisma = new PrismaClient();
 async function main() {
   const email = process.env.BOOTSTRAP_ADMIN_EMAIL || "admin@blauplug.local";
   const name = process.env.BOOTSTRAP_ADMIN_NAME || "Platform Admin";
-  const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || "ChangeMe123!";
-  const passwordHash = await bcrypt.hash(password, 12);
 
-  const admin = await prisma.user.upsert({
+  const admin = await prisma.employee.upsert({
     where: { email },
     create: {
+      employeeId: 1,
       email,
       name,
-      passwordHash,
       role: UserRole.ADMIN,
-      mustChangePassword: true,
+      isActive: true,
     },
     update: {
       name,
@@ -41,7 +38,6 @@ async function main() {
   });
 
   console.log(`Bootstrap admin ready: ${admin.email}`);
-  console.log("Change the bootstrap password on first login.");
   console.log("Create org users in the app (Admin → People) with real work emails.");
 }
 

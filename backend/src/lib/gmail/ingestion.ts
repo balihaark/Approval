@@ -1,6 +1,5 @@
 import { ApprovalState, PartyRole, Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
-import { logActivity } from "../audit.js";
 import { getGmail } from "./client.js";
 import {
   ParsedMessage,
@@ -114,15 +113,6 @@ export async function ingestParsedMessage(
         project: existing.project ?? parsed.project,
       },
     });
-    await logActivity({
-      approvalId: existing.id,
-      actorEmail: parsed.from?.email ?? actor,
-      action: "email.followup.ingested",
-      details: {
-        gmailMessageId: parsed.gmailMessageId,
-        subject: parsed.subject,
-      },
-    });
     await markProcessed(parsed);
     return { kind: "updated", id: existing.id };
   }
@@ -148,10 +138,11 @@ export async function ingestParsedMessage(
               name: parties.requester.name,
               role: PartyRole.REQUESTER,
             },
-            ...parties.approvers.map((a) => ({
+            ...parties.approvers.map((a, index) => ({
               email: normalizeEmail(a.email),
               name: a.name,
               role: PartyRole.APPROVER,
+              sequenceOrder: index,
             })),
             ...parties.participants.map((a) => ({
               email: normalizeEmail(a.email),
@@ -163,30 +154,9 @@ export async function ingestParsedMessage(
       },
     });
 
-    await tx.activityLog.create({
-      data: {
-        approvalId: created.id,
-        actorEmail: parties.requester.email,
-        action: "approval.registered",
-        details: {
-          gmailMessageId: parsed.gmailMessageId,
-          threadId: parsed.threadId,
-        },
-      },
-    });
-
     const pending = await tx.approval.update({
       where: { id: created.id },
       data: { state: ApprovalState.PENDING_APPROVAL, lastActivityAt: new Date() },
-    });
-
-    await tx.activityLog.create({
-      data: {
-        approvalId: created.id,
-        actorEmail: actor,
-        action: "approval.pending",
-        details: { from: ApprovalState.REGISTERED },
-      },
     });
 
     await tx.processedMessage.create({

@@ -30,20 +30,17 @@ enum DecisionOutcome {
   REJECTED
 }
 
-model User {
-  id                  String    @id @default(uuid())
-  email               String    @unique
-  name                String
-  passwordHash        String
-  role                UserRole  @default(USER)
-  isActive            Boolean   @default(true)
-  tokenVersion        Int       @default(0)
-  failedLoginAttempts Int       @default(0)
-  lockedUntil         DateTime?
-  mustChangePassword  Boolean   @default(false)
-  lastLoginAt         DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+// Identity is owned by Login-Auth. This is only the local employee projection;
+// it deliberately contains no password or MFA fields.
+model Employee {
+  employeeId  Int      @id
+  email       String   @unique
+  name        String
+  role        UserRole @default(USER)
+  isActive    Boolean  @default(true)
+  lastLoginAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model Approval {
@@ -62,7 +59,6 @@ model Approval {
   updatedAt      DateTime       @updatedAt
   parties        Party[]
   decisions      Decision[]
-  activityLogs   ActivityLog[]
 
   @@index([state])
   @@index([department])
@@ -77,8 +73,9 @@ model Party {
   approval   Approval  @relation(fields: [approvalId], references: [id], onDelete: Cascade)
   email      String
   name       String?
-  role       PartyRole
-  createdAt  DateTime  @default(now())
+  role          PartyRole
+  sequenceOrder Int?
+  createdAt     DateTime  @default(now())
 
   @@unique([approvalId, email, role])
   @@index([email])
@@ -95,19 +92,6 @@ model Decision {
   decidedAt  DateTime         @default(now())
 
   @@index([approvalId])
-}
-
-model ActivityLog {
-  id         String    @id @default(uuid())
-  approvalId String?
-  approval   Approval? @relation(fields: [approvalId], references: [id], onDelete: Cascade)
-  actorEmail String
-  action     String
-  details    Json?
-  createdAt  DateTime  @default(now())
-
-  @@index([approvalId])
-  @@index([createdAt])
 }
 
 model UnprocessedMail {

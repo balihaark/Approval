@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../lib/prisma.js";
+import { logActivity } from "../lib/audit.js";
 import {
   exchangeCodeForTokens,
   getAuthUrl,
@@ -49,14 +50,12 @@ async function handleOAuthCallback(
   }
 
   const tokens = await exchangeCodeForTokens(query.code);
-  await prisma.activityLog.create({
-    data: {
-      actorEmail: config.gmail.user,
-      action: "gmail.oauth.connected",
-      details: {
-        hasRefreshToken: Boolean(tokens.refresh_token),
-        expiry: tokens.expiry_date ?? null,
-      },
+  await logActivity({
+    actorEmail: config.gmail.user,
+    action: "gmail.oauth.connected",
+    details: {
+      hasRefreshToken: Boolean(tokens.refresh_token),
+      expiry: tokens.expiry_date ?? null,
     },
   });
 

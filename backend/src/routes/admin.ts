@@ -1,5 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { UserRole } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { requireAdmin } from "../plugins/auth.js";
 import { config, gmailConfigured } from "../config.js";
@@ -10,10 +11,6 @@ import {
   handlePushNotification,
 } from "../lib/gmail/ingestion.js";
 import { renewGmailWatch } from "../lib/gmail/watch.js";
-import { logActivity } from "../lib/audit.js";
-import { hashPassword } from "../lib/password.js";
-import { assertPasswordPolicy } from "../lib/security.js";
-import { normalizeEmail } from "../lib/access.js";
 
 const simulateSchema = z.object({
   from: z.string(),
@@ -23,20 +20,6 @@ const simulateSchema = z.object({
   body: z.string(),
   department: z.string().optional(),
   project: z.string().optional(),
-});
-
-const createUserSchema = z.object({
-  email: z.string().email().max(320),
-  name: z.string().min(1).max(200),
-  password: z.string().min(12).max(128),
-  role: z.enum(["USER", "ADMIN"]).optional(),
-});
-
-const patchUserSchema = z.object({
-  isActive: z.boolean().optional(),
-  role: z.enum(["USER", "ADMIN"]).optional(),
-  mustChangePassword: z.boolean().optional(),
-  resetPassword: z.string().min(12).max(128).optional(),
 });
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
@@ -70,11 +53,6 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           resolvedAt: new Date(),
           resolvedBy: request.currentUser.email,
         },
-      });
-      await logActivity({
-        actorEmail: request.currentUser.email,
-        action: "unprocessed.resolved",
-        details: { id, gmailMessageId: existing.gmailMessageId },
       });
       return updated;
     }
@@ -175,150 +153,84 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       prisma.approval.count(),
       prisma.approval.count({ where: { state: "PENDING_APPROVAL" } }),
       prisma.unprocessedMail.count({ where: { resolvedAt: null } }),
-      prisma.user.count({ where: { isActive: true } }),
+      prisma.employee.count({ where: { isActive: true } }),
     ]);
     return { approvals, pending, unprocessed, users };
   });
 
   app.get("/admin/users", { preHandler: requireAdmin }, async () => {
-    const users = await prisma.user.findMany({
-      orderBy: { email: "asc" },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        isActive: true,
-        mustChangePassword: true,
-        lastLoginAt: true,
-        lockedUntil: true,
-        createdAt: true,
-      },
-    });
-    return { items: users };
+    const items = await prisma.employee.findMany({ orderBy: { createdAt: "desc" } });
+    return {
+      items: items.map((e) => ({
+        id: String(e.employeeId),
+        email: e.email,
+        name: e.name,
+        role: e.role,
+        isActive: e.isActive,
+        mustChangePassword: false,
+        lastLoginAt: e.lastLoginAt?.toISOString() ?? null,
+        lockedUntil: null,
+        createdAt: e.createdAt.toISOString(),
+      })),
+    };
   });
 
   app.post("/admin/users", { preHandler: requireAdmin }, async (request, reply) => {
-    const body = createUserSchema.safeParse(request.body);
-    if (!body.success) {
-      return reply.badRequest(
-        "email, name, and a strong password (12+ chars, mixed case, number, symbol) are required"
-      );
-    }
-    const policyError = assertPasswordPolicy(body.data.password);
-    if (policyError) return reply.badRequest(policyError);
+    const body = request.body as { email?: string; name?: string; role?: "USER" | "ADMIN" };
+    if (!body.email || !body.name) return reply.badRequest("Email and name are required");
+    const email = body.email.trim().toLowerCase();
+    const existing = await prisma.employee.findUnique({ where: { email } });
+    if (existing) return reply.badRequest("Employee with this email already exists");
 
-    const email = normalizeEmail(body.data.email);
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) return reply.conflict("A user with that email already exists");
-    const user = await prisma.user.create({
+    const maxEmp = await prisma.employee.findFirst({ orderBy: { employeeId: "desc" } });
+    const nextId = (maxEmp?.employeeId ?? 1000) + 1;
+    const employee = await prisma.employee.create({
       data: {
+        employeeId: nextId,
         email,
-        name: body.data.name.trim(),
-        passwordHash: await hashPassword(body.data.password),
-        role: body.data.role ?? "USER",
-        mustChangePassword: true,
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
+        name: body.name.trim(),
+        role: body.role === "ADMIN" ? UserRole.ADMIN : UserRole.USER,
         isActive: true,
-        mustChangePassword: true,
-        createdAt: true,
       },
     });
-    await logActivity({
-      actorEmail: request.currentUser.email,
-      action: "user.created",
-      details: { email: user.email, role: user.role },
-    });
-    return { user };
+
+    return {
+      id: String(employee.employeeId),
+      email: employee.email,
+      name: employee.name,
+      role: employee.role,
+      isActive: employee.isActive,
+      mustChangePassword: false,
+      lastLoginAt: null,
+      lockedUntil: null,
+      createdAt: employee.createdAt.toISOString(),
+    };
   });
 
-  app.patch(
-    "/admin/users/:id",
-    { preHandler: requireAdmin },
-    async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const body = patchUserSchema.safeParse(request.body);
-      if (!body.success) return reply.badRequest("Invalid payload");
+  app.patch("/admin/users/:id", { preHandler: requireAdmin }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const empId = parseInt(id, 10);
+    const body = request.body as { isActive?: boolean; role?: "USER" | "ADMIN"; name?: string };
 
-      const target = await prisma.user.findUnique({ where: { id } });
-      if (!target) return reply.notFound("User not found");
+    const employee = await prisma.employee.update({
+      where: { employeeId: empId },
+      data: {
+        isActive: body.isActive !== undefined ? body.isActive : undefined,
+        role: body.role ? (body.role === "ADMIN" ? UserRole.ADMIN : UserRole.USER) : undefined,
+        name: body.name ? body.name.trim() : undefined,
+      },
+    });
 
-      if (body.data.isActive === false && target.id === request.currentUser.id) {
-        return reply.badRequest("You cannot deactivate your own account");
-      }
-
-      if (
-        (body.data.role === "USER" || body.data.isActive === false) &&
-        target.role === "ADMIN"
-      ) {
-        const adminCount = await prisma.user.count({
-          where: { role: "ADMIN", isActive: true },
-        });
-        const wouldLoseAdmin =
-          body.data.role === "USER" || body.data.isActive === false;
-        if (wouldLoseAdmin && adminCount <= 1) {
-          return reply.badRequest("Cannot remove or deactivate the last admin");
-        }
-      }
-
-      if (body.data.resetPassword) {
-        const policyError = assertPasswordPolicy(body.data.resetPassword);
-        if (policyError) return reply.badRequest(policyError);
-      }
-
-      const user = await prisma.user.update({
-        where: { id },
-        data: {
-          ...(body.data.isActive !== undefined
-            ? { isActive: body.data.isActive }
-            : {}),
-          ...(body.data.role !== undefined ? { role: body.data.role } : {}),
-          ...(body.data.mustChangePassword !== undefined
-            ? { mustChangePassword: body.data.mustChangePassword }
-            : {}),
-          ...(body.data.resetPassword
-            ? {
-                passwordHash: await hashPassword(body.data.resetPassword),
-                mustChangePassword: true,
-                tokenVersion: { increment: 1 },
-                failedLoginAttempts: 0,
-                lockedUntil: null,
-              }
-            : {}),
-          ...(!body.data.resetPassword && body.data.isActive === false
-            ? { tokenVersion: { increment: 1 } }
-            : {}),
-        },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          isActive: true,
-          mustChangePassword: true,
-          lastLoginAt: true,
-          lockedUntil: true,
-          createdAt: true,
-        },
-      });
-
-      await logActivity({
-        actorEmail: request.currentUser.email,
-        action: "user.updated",
-        details: {
-          email: user.email,
-          isActive: user.isActive,
-          role: user.role,
-          passwordReset: Boolean(body.data.resetPassword),
-        },
-      });
-
-      return { user };
-    }
-  );
+    return {
+      id: String(employee.employeeId),
+      email: employee.email,
+      name: employee.name,
+      role: employee.role,
+      isActive: employee.isActive,
+      mustChangePassword: false,
+      lastLoginAt: employee.lastLoginAt?.toISOString() ?? null,
+      lockedUntil: null,
+      createdAt: employee.createdAt.toISOString(),
+    };
+  });
 }

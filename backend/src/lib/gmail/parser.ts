@@ -158,28 +158,89 @@ function stripQuotedHistory(text: string): string {
   return result.join("\n").trim();
 }
 
-function stripSignature(text: string): string {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  const sigStarts = [
+export function stripSignature(text: string): string {
+  if (!text) return "";
+
+  // 1. Remove multiline disclaimer blocks surrounded by 5+ asterisks (e.g. *****Disclaimer...*****)
+  let cleaned = text.replace(/\*{5,}[\s\S]*?\*{5,}/g, "").trim();
+
+  // 2. Remove inline image references like [cid:...]
+  cleaned = cleaned.replace(/\[cid:[^\]]+\]/gi, "").trim();
+
+  const lines = cleaned.replace(/\r\n/g, "\n").split("\n");
+
+  // Sign-off standalone line patterns (e.g. "Best Regards ,", "Thanks,", "Sent from my iPhone")
+  const sigStartRegexes = [
     /^--\s*$/,
-    /^thanks[,.]?\s*$/i,
-    /^thank you[,.]?\s*$/i,
-    /^best regards[,.]?\s*$/i,
-    /^regards[,.]?\s*$/i,
-    /^sent from my /i,
-    /^get outlook for /i,
+    /^(best\s+regards|kind\s+regards|warm\s+regards|regards|thanks|thank\s+you|cheers|yours\s+sincerely|sincerely)\s*[,.]?\s*$/i,
+    /^sent\s+from\s+my\b/i,
+    /^get\s+outlook\s+for\b/i,
   ];
-  let cut = lines.length;
+
+  // Structural signature line regexes:
+  // Line with 1 or 2 pipes: e.g. "Name | Title | Company" or "Name | Title"
+  const pipeLineRegex = /^[^|\n]{2,60}\s*\|\s*[^|\n]{2,60}(\s*\|\s*[^|\n]{2,60})?\s*$/;
+  // Separator line: e.g. "_________________" or "-----------------"
+  const separatorLineRegex = /^(_|-|\*=){3,}\s*$/;
+  // Contact line: phone numbers, emails, <mailto:...>
+  const contactLineRegex = /(?:\+?\d[\d\s\-\/\(\)\.]{7,}|\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|<mailto:[^>]+>)/i;
+
+  let cutIndex = lines.length;
+
   for (let i = 0; i < lines.length; i++) {
-    if (sigStarts.some((re) => re.test(lines[i].trim()))) {
-      // Only treat as signature if it appears in the latter half
-      if (i >= Math.max(2, Math.floor(lines.length * 0.4))) {
-        cut = i;
+    const lineTrimmed = lines[i].trim();
+    if (!lineTrimmed) continue;
+
+    // Check sign-off trigger lines
+    if (sigStartRegexes.some((re) => re.test(lineTrimmed))) {
+      cutIndex = i;
+      break;
+    }
+
+    // Structural Check 1: "Name | Title | Company" line followed by separator or contact info
+    if (pipeLineRegex.test(lineTrimmed)) {
+      const next1 = lines[i + 1]?.trim() ?? "";
+      const next2 = lines[i + 2]?.trim() ?? "";
+      if (
+        separatorLineRegex.test(next1) ||
+        contactLineRegex.test(next1) ||
+        separatorLineRegex.test(next2) ||
+        contactLineRegex.test(next2)
+      ) {
+        cutIndex = i;
+        break;
+      }
+    }
+
+    // Structural Check 2: Separator line followed by contact info
+    if (separatorLineRegex.test(lineTrimmed)) {
+      const next1 = lines[i + 1]?.trim() ?? "";
+      const next2 = lines[i + 2]?.trim() ?? "";
+      if (contactLineRegex.test(next1) || contactLineRegex.test(next2)) {
+        // If the line preceding the separator is a name/title line, cut from there
+        const prev = i > 0 ? lines[i - 1].trim() : "";
+        if (prev && !prev.includes(":") && prev.length < 80) {
+          cutIndex = i - 1;
+        } else {
+          cutIndex = i;
+        }
         break;
       }
     }
   }
-  return lines.slice(0, cut).join("\n").trim();
+
+  const resultLines = lines.slice(0, cutIndex);
+
+  // Trim trailing empty lines or stray separators
+  while (
+    resultLines.length > 0 &&
+    (resultLines[resultLines.length - 1].trim() === "" ||
+      separatorLineRegex.test(resultLines[resultLines.length - 1].trim()))
+  ) {
+    resultLines.pop();
+  }
+
+  return resultLines.join("\n").trim();
 }
 
 function extractLabel(

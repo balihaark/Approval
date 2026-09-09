@@ -6,16 +6,13 @@ import { useEffect, useState } from "react";
 import {
   ChevronDown,
   Inbox,
-  KeyRound,
   LayoutList,
   LogOut,
   Mail,
   Menu,
-  Plug,
   PlusCircle,
   Send,
   ShieldAlert,
-  UserPlus,
   Users,
   X,
   type LucideIcon,
@@ -33,7 +30,6 @@ const PRIMARY_NAV: NavItem[] = [
 
 const ADMIN_NAV: NavItem[] = [
   { href: "/all", label: "All approvals", icon: LayoutList },
-  { href: "/admin/users", label: "People", icon: UserPlus },
   { href: "/admin/unprocessed", label: "Unprocessed", icon: ShieldAlert },
   { href: "/admin/gmail", label: "Gmail", icon: Mail },
 ];
@@ -45,21 +41,24 @@ function isActive(pathname: string, href: string) {
 function NavRow({
   item,
   active,
+  isExpanded = true,
   onNavigate,
 }: {
   item: NavItem;
   active: boolean;
+  isExpanded?: boolean;
   onNavigate?: () => void;
 }) {
   const Icon = item.icon;
-  return (
+  const linkContent = (
     <Link
       href={item.href}
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
-      className={`group flex h-row items-center gap-2.5 rounded px-2.5 text-base font-medium
+      className={`group flex h-row items-center gap-2.5 rounded text-base font-medium
         transition-colors duration-150
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30
+        ${isExpanded ? "w-full px-2.5" : "h-10 w-10 justify-center mx-auto"}
         ${
           active
             ? "bg-nav-active text-white"
@@ -72,12 +71,30 @@ function NavRow({
         aria-hidden
         className={`shrink-0 ${active ? "text-white" : "text-nav-muted group-hover:text-nav-text"}`}
       />
-      <span className="truncate">{item.label}</span>
+      {isExpanded && <span className="truncate">{item.label}</span>}
     </Link>
   );
+
+  if (!isExpanded) {
+    return (
+      <div className="flex justify-center">
+        <Tooltip label={item.label} side="right">
+          {linkContent}
+        </Tooltip>
+      </div>
+    );
+  }
+
+  return linkContent;
 }
 
-function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+function SidebarContent({
+  isExpanded = true,
+  onNavigate,
+}: {
+  isExpanded?: boolean;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
   const [adminOpen, setAdminOpen] = useState(true);
@@ -91,47 +108,71 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     .join("")
     .toUpperCase();
 
+  const newRequestLink = (
+    <Link
+      href="/new"
+      onClick={onNavigate}
+      className={`mb-3 flex h-control items-center gap-2 rounded text-base font-medium
+        transition-colors duration-150
+        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30
+        ${isExpanded ? "w-full px-2.5" : "h-10 w-10 justify-center mx-auto"}
+        ${
+          isActive(pathname, "/new")
+            ? "bg-nav-active text-white"
+            : "bg-white/[0.06] text-nav-strong hover:bg-white/[0.12]"
+        }`}
+    >
+      <PlusCircle size={17} strokeWidth={1.85} aria-hidden />
+      {isExpanded && <span className="truncate">New request</span>}
+    </Link>
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-nav-bg">
       {/* Workspace identity */}
-      <div className="flex h-header shrink-0 items-center gap-2.5 border-b border-nav-border px-3">
-        <div className="flex h-7 w-7 items-center justify-center rounded bg-brand-500 text-white">
-          <Plug size={15} strokeWidth={2.25} aria-hidden />
+      <div
+        className={`flex h-header shrink-0 items-center border-b border-nav-border ${
+          isExpanded ? "px-3 gap-2.5" : "justify-center"
+        }`}
+      >
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded">
+          <img src="/brand-mark.png" alt="BlauPlug" className="h-full w-full object-contain" />
         </div>
-        <div className="min-w-0">
-          <div className="truncate text-base font-semibold tracking-tightish text-nav-strong">
-            BlauPlug
+        {isExpanded && (
+          <div className="min-w-0">
+            <div className="truncate text-base font-semibold tracking-tightish text-nav-strong">
+              BlauPlug
+            </div>
+            <div className="truncate text-2xs text-nav-muted">Approvals</div>
           </div>
-          <div className="truncate text-2xs text-nav-muted">Approvals</div>
-        </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3 scrollbar-thin">
-        <Link
-          href="/new"
-          onClick={onNavigate}
-          className={`mb-3 flex h-control items-center gap-2 rounded px-2.5 text-base font-medium
-            transition-colors duration-150
-            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30
-            ${
-              isActive(pathname, "/new")
-                ? "bg-nav-active text-white"
-                : "bg-white/[0.06] text-nav-strong hover:bg-white/[0.12]"
-            }`}
-        >
-          <PlusCircle size={17} strokeWidth={1.85} aria-hidden />
-          New request
-        </Link>
+        {isExpanded ? (
+          newRequestLink
+        ) : (
+          <div className="flex justify-center">
+            <Tooltip label="New request" side="right">
+              {newRequestLink}
+            </Tooltip>
+          </div>
+        )}
 
-        <div className="px-2.5 pb-1 text-2xs font-semibold uppercase tracking-wideish text-nav-muted">
-          Approvals
-        </div>
+        {isExpanded ? (
+          <div className="px-2.5 pb-1 text-2xs font-semibold uppercase tracking-wideish text-nav-muted">
+            Approvals
+          </div>
+        ) : (
+          <div className="mx-2 my-2 h-px bg-nav-border/60" />
+        )}
         <nav className="space-y-0.5">
           {PRIMARY_NAV.map((item) => (
             <NavRow
               key={item.href}
               item={item}
               active={isActive(pathname, item.href)}
+              isExpanded={isExpanded}
               onNavigate={onNavigate}
             />
           ))}
@@ -139,26 +180,31 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
         {user.role === "ADMIN" && (
           <div className="mt-4 border-t border-nav-border pt-3">
-            <button
-              type="button"
-              onClick={() => setAdminOpen((v) => !v)}
-              aria-expanded={adminOpen}
-              className="flex w-full items-center gap-1 rounded px-2.5 py-1 text-2xs font-semibold uppercase tracking-wideish text-nav-muted transition-colors duration-150 hover:text-nav-text"
-            >
-              <ChevronDown
-                size={12}
-                aria-hidden
-                className={`transition-transform duration-150 ${adminOpen ? "" : "-rotate-90"}`}
-              />
-              Administration
-            </button>
-            {adminOpen && (
+            {isExpanded ? (
+              <button
+                type="button"
+                onClick={() => setAdminOpen((v) => !v)}
+                aria-expanded={adminOpen}
+                className="flex w-full items-center gap-1 rounded px-2.5 py-1 text-2xs font-semibold uppercase tracking-wideish text-nav-muted transition-colors duration-150 hover:text-nav-text"
+              >
+                <ChevronDown
+                  size={12}
+                  aria-hidden
+                  className={`transition-transform duration-150 ${adminOpen ? "" : "-rotate-90"}`}
+                />
+                Administration
+              </button>
+            ) : (
+              <div className="mx-2 my-2 h-px bg-nav-border/60" />
+            )}
+            {(adminOpen || !isExpanded) && (
               <nav className="mt-0.5 space-y-0.5">
                 {ADMIN_NAV.map((item) => (
                   <NavRow
                     key={item.href}
                     item={item}
                     active={isActive(pathname, item.href)}
+                    isExpanded={isExpanded}
                     onNavigate={onNavigate}
                   />
                 ))}
@@ -170,46 +216,76 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       {/* Account */}
       <div className="shrink-0 border-t border-nav-border p-2">
-        <div className="flex items-center gap-2.5 rounded px-2 py-2">
-          <span
-            aria-hidden
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-white/10 text-2xs font-semibold text-nav-strong"
-          >
-            {initials || "?"}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-nav-strong" title={user.name}>
-              {user.name}
+        {isExpanded ? (
+          <div className="flex items-center gap-2.5 rounded px-2 py-2">
+            <span
+              aria-hidden
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-white/10 text-2xs font-semibold text-nav-strong"
+            >
+              {initials || "?"}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-nav-strong" title={user.name}>
+                {user.name}
+              </div>
+              <div className="truncate text-2xs text-nav-muted" title={user.email}>
+                {user.email}
+              </div>
             </div>
-            <div className="truncate text-2xs text-nav-muted" title={user.email}>
-              {user.email}
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Tooltip label="Sign out">
+                <button
+                  type="button"
+                  onClick={() => void logout()}
+                  aria-label="Sign out"
+                  className="flex h-7 w-7 items-center justify-center rounded text-nav-muted transition-colors duration-150 hover:bg-nav-hover hover:text-nav-strong"
+                >
+                  <LogOut size={14} aria-hidden />
+                </button>
+              </Tooltip>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-0.5">
-            <Tooltip label="Change password">
-              <Link
-                href="/account/password"
-                onClick={onNavigate}
-                aria-label="Change password"
-                className="flex h-7 w-7 items-center justify-center rounded text-nav-muted transition-colors duration-150 hover:bg-nav-hover hover:text-nav-strong"
+        ) : (
+          <div className="flex flex-col items-center gap-1.5 py-1">
+            <Tooltip label={`${user.name} (${user.email})`} side="right">
+              <span
+                aria-hidden
+                className="flex h-7 w-7 items-center justify-center rounded bg-white/10 text-2xs font-semibold text-nav-strong"
               >
-                <KeyRound size={14} aria-hidden />
-              </Link>
-            </Tooltip>
-            <Tooltip label="Sign out">
-              <button
-                type="button"
-                onClick={() => void logout()}
-                aria-label="Sign out"
-                className="flex h-7 w-7 items-center justify-center rounded text-nav-muted transition-colors duration-150 hover:bg-nav-hover hover:text-nav-strong"
-              >
-                <LogOut size={14} aria-hidden />
-              </button>
+                {initials || "?"}
+              </span>
             </Tooltip>
           </div>
-        </div>
+        )}
       </div>
     </div>
+  );
+}
+
+function DesktopSidebar() {
+  const [isHovered, setIsHovered] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (isHovered) {
+      timer = setTimeout(() => setIsExpanded(true), 150);
+    } else {
+      setIsExpanded(false);
+    }
+    return () => clearTimeout(timer);
+  }, [isHovered]);
+
+  return (
+    <aside
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className={`hidden shrink-0 overflow-hidden border-r border-nav-border bg-nav-bg transition-[width] duration-200 ease-out lg:block ${
+        isExpanded ? "w-[248px]" : "w-[64px]"
+      }`}
+    >
+      <SidebarContent isExpanded={isExpanded} />
+    </aside>
   );
 }
 
@@ -253,9 +329,7 @@ export function AppShell({
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
-      <aside className="hidden w-[248px] shrink-0 lg:block">
-        <Sidebar />
-      </aside>
+      <DesktopSidebar />
 
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
@@ -275,7 +349,7 @@ export function AppShell({
             >
               <X size={16} />
             </button>
-            <Sidebar onNavigate={() => setMobileOpen(false)} />
+            <SidebarContent isExpanded={true} onNavigate={() => setMobileOpen(false)} />
           </div>
         </div>
       )}

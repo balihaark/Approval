@@ -40,9 +40,6 @@ async function main() {
     await prisma.decision.deleteMany({
       where: { approvalId: { in: seedApprovalIds } },
     });
-    await prisma.activityLog.deleteMany({
-      where: { approvalId: { in: seedApprovalIds } },
-    });
     await prisma.party.deleteMany({
       where: { approvalId: { in: seedApprovalIds } },
     });
@@ -60,12 +57,12 @@ async function main() {
     },
   });
 
-  const users = await prisma.user.deleteMany({
+  const employees = await prisma.employee.deleteMany({
     where: { email: { in: SEED_USER_EMAILS } },
   });
 
   // Keep bootstrap admin; ensure it still exists for first login
-  const admin = await prisma.user.findUnique({
+  const admin = await prisma.employee.findUnique({
     where: { email: "admin@blauplug.local" },
   });
 
@@ -74,10 +71,10 @@ async function main() {
       {
         removedSeedApprovals: seedApprovals.map((a) => a.threadId),
         removedUnprocessed: unprocessed.count,
-        removedUsers: users.count,
+        removedEmployees: employees.count,
         remainingAdmin: Boolean(admin),
         remainingApprovals: await prisma.approval.count(),
-        remainingUsers: await prisma.user.count(),
+        remainingEmployees: await prisma.employee.count(),
       },
       null,
       2

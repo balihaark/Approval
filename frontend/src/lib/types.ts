@@ -1,5 +1,5 @@
 export type User = {
-  id: string;
+  id: number | string;
   email: string;
   name: string;
   role: "USER" | "ADMIN";
@@ -10,6 +10,7 @@ export type Party = {
   email: string;
   name: string | null;
   role: "REQUESTER" | "APPROVER" | "PARTICIPANT";
+  sequenceOrder?: number | null;
 };
 
 export type Decision = {
@@ -33,7 +34,7 @@ export type Approval = {
   createdAt: string;
   lastActivityAt: string;
   requester: { email: string; name: string | null } | null;
-  approvers: { email: string; name: string | null }[];
+  approvers: { email: string; name: string | null; sequenceOrder?: number | null }[];
   participants: { email: string; name: string | null }[];
   parties: Party[];
   decisions: Decision[];
@@ -58,16 +59,4 @@ export type UnprocessedMail = {
   createdAt: string;
   resolvedAt: string | null;
   resolvedBy: string | null;
-};
-
-export type AdminUser = {
-  id: string;
-  email: string;
-  name: string;
-  role: "USER" | "ADMIN";
-  isActive: boolean;
-  mustChangePassword: boolean;
-  lastLoginAt: string | null;
-  lockedUntil: string | null;
-  createdAt: string;
 };

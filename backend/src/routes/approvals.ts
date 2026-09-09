@@ -4,7 +4,6 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { authenticate } from "../plugins/auth.js";
 import { userCanAccessApproval, normalizeEmail } from "../lib/access.js";
-import { logActivity } from "../lib/audit.js";
 import { gmailConfigured, config } from "../config.js";
 import { sendThreadReply, sendNewApprovalEmail } from "../lib/gmail/reply.js";
 
@@ -59,6 +58,17 @@ function serializeApproval(
   }>
 ) {
   const requester = approval.parties.find((p) => p.role === "REQUESTER");
+  const approvers = approval.parties
+    .filter((p) => p.role === "APPROVER")
+    .sort((a, b) => (a.sequenceOrder ?? 0) - (b.sequenceOrder ?? 0));
+  const participants = approval.parties.filter((p) => p.role === "PARTICIPANT");
+  const sortedParties = [...approval.parties].sort((a, b) => {
+    if (a.role === "APPROVER" && b.role === "APPROVER") {
+      return (a.sequenceOrder ?? 0) - (b.sequenceOrder ?? 0);
+    }
+    return 0;
+  });
+
   return {
     id: approval.id,
     subject: approval.subject,
@@ -74,24 +84,31 @@ function serializeApproval(
     requester: requester
       ? { email: requester.email, name: requester.name }
       : null,
-    approvers: approval.parties
-      .filter((p) => p.role === "APPROVER")
-      .map((p) => ({ email: p.email, name: p.name })),
-    participants: approval.parties
-      .filter((p) => p.role === "PARTICIPANT")
-      .map((p) => ({ email: p.email, name: p.name })),
-    parties: approval.parties.map((p) => ({
+    approvers: approvers.map((p) => ({
+      email: p.email,
+      name: p.name,
+      sequenceOrder: p.sequenceOrder,
+    })),
+    participants: participants.map((p) => ({
+      email: p.email,
+      name: p.name,
+    })),
+    parties: sortedParties.map((p) => ({
       email: p.email,
       name: p.name,
       role: p.role,
+      sequenceOrder: p.sequenceOrder,
     })),
-    decisions: approval.decisions.map((d) => ({
-      id: d.id,
-      decision: d.decision,
-      reason: d.reason,
-      decidedBy: d.decidedBy,
-      decidedAt: d.decidedAt,
-    })),
+    decisions: approval.decisions
+      .slice()
+      .sort((a, b) => new Date(a.decidedAt).getTime() - new Date(b.decidedAt).getTime())
+      .map((d) => ({
+        id: d.id,
+        decision: d.decision,
+        reason: d.reason,
+        decidedBy: d.decidedBy,
+        decidedAt: d.decidedAt,
+      })),
   };
 }
 
@@ -182,10 +199,11 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
                   name: user.name,
                   role: PartyRole.REQUESTER,
                 },
-                ...approvers.map((email) => ({
+                ...approvers.map((email, index) => ({
                   email,
                   name: null as string | null,
                   role: PartyRole.APPROVER,
+                  sequenceOrder: index,
                 })),
                 ...participants.map((email) => ({
                   email,
@@ -196,20 +214,6 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
             },
           },
           include: { parties: true, decisions: true },
-        });
-
-        await tx.activityLog.create({
-          data: {
-            approvalId: created.id,
-            actorEmail: user.email,
-            action: "approval.created.in_app",
-            details: {
-              gmailMessageId: sent.gmailMessageId,
-              threadId: sent.threadId,
-              approvers,
-              participants,
-            },
-          },
         });
 
         await tx.processedMessage.upsert({
@@ -359,11 +363,35 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
       if (!(await userCanAccessApproval(request.currentUser, id))) {
         return reply.forbidden("You are not a party to this approval");
       }
-      const logs = await prisma.activityLog.findMany({
-        where: { approvalId: id },
-        orderBy: { createdAt: "asc" },
+      const approval = await prisma.approval.findUnique({
+        where: { id },
+        include: {
+          parties: true,
+          decisions: { orderBy: { decidedAt: "asc" } },
+        },
       });
-      return { items: logs };
+      if (!approval) return reply.notFound("Approval not found");
+
+      const requester = approval.parties.find((p) => p.role === "REQUESTER");
+      const approversCount = approval.parties.filter((p) => p.role === "APPROVER").length;
+      const items = [
+        {
+          id: `act-created-${approval.id}`,
+          actorEmail: requester?.email ?? "system",
+          action: "approval.created.in_app",
+          details: null,
+          createdAt: approval.createdAt.toISOString(),
+        },
+        ...approval.decisions.map((d, idx) => ({
+          id: d.id,
+          actorEmail: d.decidedBy,
+          action: d.decision === "APPROVED" ? "approval.approved" : "approval.rejected",
+          details: { isLastApprover: idx === approversCount - 1, reason: d.reason },
+          createdAt: d.decidedAt.toISOString(),
+        })),
+      ];
+
+      return { items };
     }
   );
 
@@ -386,12 +414,6 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
         },
         include: { parties: true, decisions: true },
       });
-      await logActivity({
-        approvalId: id,
-        actorEmail: request.currentUser.email,
-        action: "approval.metadata.updated",
-        details: body.data,
-      });
       return serializeApproval(updated);
     }
   );
@@ -406,26 +428,43 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
 
       const approval = await prisma.approval.findUnique({
         where: { id },
-        include: { parties: true, decisions: true },
+        include: {
+          parties: true,
+          decisions: { orderBy: { decidedAt: "asc" } },
+        },
       });
       if (!approval) return reply.notFound("Approval not found");
-
-      const user = request.currentUser;
-      const isApprover = approval.parties.some(
-        (p) =>
-          p.role === PartyRole.APPROVER &&
-          p.email.toLowerCase() === user.email.toLowerCase()
-      );
-      const isAdminOverride = !isApprover && user.role === "ADMIN";
-      if (!isApprover && !isAdminOverride) {
-        return reply.forbidden("Only assigned approvers can decide");
-      }
 
       if (
         approval.state === ApprovalState.APPROVED ||
         approval.state === ApprovalState.REJECTED
       ) {
         return reply.conflict("This approval has already been decided");
+      }
+
+      const approvers = approval.parties
+        .filter((p) => p.role === PartyRole.APPROVER)
+        .sort((a, b) => (a.sequenceOrder ?? 0) - (b.sequenceOrder ?? 0));
+
+      const decisions = approval.decisions;
+      const turnIndex = decisions.length;
+
+      if (turnIndex >= approvers.length) {
+        return reply.conflict("This approval has already been decided");
+      }
+
+      const currentApprover = approvers[turnIndex];
+      const user = request.currentUser;
+
+      const isCurrentTurnApprover =
+        user.email.toLowerCase() === currentApprover.email.toLowerCase();
+      const isAdminOverride = !isCurrentTurnApprover && user.role === "ADMIN";
+
+      if (!isCurrentTurnApprover && !isAdminOverride) {
+        const currentDisplayName = currentApprover.name || currentApprover.email;
+        return reply.forbidden(
+          `It is not your turn to decide on this approval yet — waiting on ${currentDisplayName} to act first.`
+        );
       }
 
       if (body.data.decision === "rejected") {
@@ -446,10 +485,13 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
 
       const outcome =
         body.data.decision === "approved" ? "APPROVED" : "REJECTED";
+      const isLastApprover = turnIndex === approvers.length - 1;
       const nextState =
-        outcome === "APPROVED"
+        outcome === "REJECTED"
+          ? ApprovalState.REJECTED
+          : isLastApprover
           ? ApprovalState.APPROVED
-          : ApprovalState.REJECTED;
+          : ApprovalState.PENDING_APPROVAL;
 
       const updated = await prisma.$transaction(async (tx) => {
         await tx.decision.create({
@@ -466,30 +508,18 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
         const row = await tx.approval.update({
           where: { id },
           data: { state: nextState, lastActivityAt: new Date() },
-          include: { parties: true, decisions: true },
-        });
-        await tx.activityLog.create({
-          data: {
-            approvalId: id,
-            actorEmail: user.email,
-            action:
-              outcome === "APPROVED"
-                ? "approval.approved"
-                : "approval.rejected",
-            details: {
-              reason:
-                body.data.decision === "rejected" || isAdminOverride
-                  ? body.data.reason!.trim()
-                  : null,
-              adminOverride: isAdminOverride,
-            },
-          },
+          include: { parties: true, decisions: { orderBy: { decidedAt: "asc" } } },
         });
         return row;
       });
 
       let emailError: string | null = null;
-      if (gmailConfigured() && !approval.threadId.startsWith("local-")) {
+      const shouldSendEmail =
+        (outcome === "REJECTED" || isLastApprover) &&
+        gmailConfigured() &&
+        !approval.threadId.startsWith("local-");
+
+      if (shouldSendEmail) {
         try {
           const requester = approval.parties.find(
             (p) => p.role === "REQUESTER"
@@ -515,20 +545,8 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
             subject: approval.subject,
             body: bodyText,
           });
-          await logActivity({
-            approvalId: id,
-            actorEmail: user.email,
-            action: "email.decision.sent",
-            details: { outcome },
-          });
         } catch (err) {
           emailError = err instanceof Error ? err.message : "Failed to send email";
-          await logActivity({
-            approvalId: id,
-            actorEmail: user.email,
-            action: "email.decision.failed",
-            details: { error: emailError },
-          });
         }
       }
 

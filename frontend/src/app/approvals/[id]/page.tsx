@@ -32,15 +32,15 @@ function formatDate(iso: string) {
 }
 
 const ACTION_LABEL: Record<string, string> = {
-  "approval.registered": "Registered from email",
-  "approval.created.in_app": "Created in app and emailed",
-  "approval.pending": "Moved to pending approval",
+  "approval.registered": "Request received",
+  "approval.created.in_app": "Request created",
+  "approval.pending": "Waiting for approval",
   "approval.approved": "Approved",
   "approval.rejected": "Rejected",
-  "approval.metadata.updated": "Updated department/project",
-  "email.decision.sent": "Decision email sent on the original thread",
-  "email.decision.failed": "Decision email failed to send",
-  "email.followup.ingested": "Follow-up email ingested on this thread",
+  "approval.metadata.updated": "Details updated",
+  "email.decision.sent": "Reply sent to requester",
+  "email.decision.failed": "Reply email failed to send",
+  "email.followup.ingested": "Follow-up email received",
 };
 
 const ROLE_TONE: Record<string, BadgeTone> = {
@@ -48,6 +48,12 @@ const ROLE_TONE: Record<string, BadgeTone> = {
   APPROVER: "warning",
   PARTICIPANT: "neutral",
 };
+
+function ordinal(n: number) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
 
 export default function ApprovalDetailPage() {
   const params = useParams<{ id: string }>();
@@ -78,14 +84,36 @@ export default function ApprovalDetailPage() {
     reload().catch((err: Error) => setLoadError(err.message));
   }, [reload]);
 
-  const canDecide =
+  const turnIndex = approval ? approval.decisions.length : 0;
+  const currentApprover = approval?.approvers[turnIndex];
+  const hasMultipleApprovers = (approval?.approvers.length ?? 0) > 1;
+
+  const isCurrentTurnUser =
+    approval &&
+    currentApprover &&
+    user &&
+    currentApprover.email.toLowerCase() === user.email.toLowerCase();
+
+  const isUserAnApprover =
+    approval &&
+    user &&
+    approval.approvers.some(
+      (a) => a.email.toLowerCase() === user.email.toLowerCase()
+    );
+
+  const isAdmin = user?.role === "ADMIN";
+
+  const canDecideNow =
     approval &&
     approval.state === "PENDING_APPROVAL" &&
-    user &&
-    (user.role === "ADMIN" ||
-      approval.approvers.some(
-        (a) => a.email.toLowerCase() === user.email.toLowerCase()
-      ));
+    (isCurrentTurnUser || isAdmin);
+
+  const isWaitingForOtherTurn =
+    approval &&
+    approval.state === "PENDING_APPROVAL" &&
+    isUserAnApprover &&
+    !isCurrentTurnUser &&
+    !isAdmin;
 
   async function onDecide(decision: "approved" | "rejected") {
     if (!approval) return;
@@ -143,8 +171,8 @@ export default function ApprovalDetailPage() {
       subtitle={
         approval
           ? `Opened ${formatDate(approval.createdAt)} · Last activity ${formatDate(
-              approval.lastActivityAt
-            )}`
+            approval.lastActivityAt
+          )}`
           : undefined
       }
       actions={
@@ -211,7 +239,12 @@ export default function ApprovalDetailPage() {
                           className="absolute -left-[1.32rem] top-1.5 h-2 w-2 rounded-full border-2 border-white bg-brand-500"
                         />
                         <div className="text-base font-medium text-slate-900">
-                          {ACTION_LABEL[item.action] || item.action}
+                          {item.action === "approval.approved" &&
+                          item.details &&
+                          typeof item.details === "object" &&
+                          (item.details as { isLastApprover?: boolean }).isLastApprover === false
+                            ? "Approved — waiting on next approver"
+                            : ACTION_LABEL[item.action] || item.action}
                         </div>
                         <div className="mt-0.5 truncate text-xs text-slate-500">
                           {item.actorEmail} · {formatDate(item.createdAt)}
@@ -221,20 +254,48 @@ export default function ApprovalDetailPage() {
                   </ol>
                 )}
               </Panel>
+
+              <Panel title="Classification">
+                <form onSubmit={onSaveMeta} className="space-y-3">
+                  <Field label="Department">
+                    <Input
+                      value={dept}
+                      onChange={(e) => setDept(e.target.value)}
+                      placeholder="e.g. Hardware"
+                    />
+                  </Field>
+                  <Field label="Project">
+                    <Input
+                      value={project}
+                      onChange={(e) => setProject(e.target.value)}
+                      placeholder="e.g. Q3 rollout"
+                    />
+                  </Field>
+                  <Button
+                    type="submit"
+                    variant="secondary"
+                    size="sm"
+                    loading={busy}
+                  >
+                    Save
+                  </Button>
+                </form>
+              </Panel>
             </div>
 
             <div className="space-y-4">
               {formError && <Alert variant="error">{formError}</Alert>}
 
-              {canDecide && (
-                <Panel title="Your decision">
+              {canDecideNow && (
+                <Panel title={isAdmin && !isCurrentTurnUser ? "Admin Decision Override" : "Your decision"}>
                   <p className="mb-3 text-xs leading-5 text-slate-500">
-                    Decisions are recorded in the app. A reply is then sent on
-                    the original email thread.
+                    {isAdmin && !isCurrentTurnUser
+                      ? `Deciding on behalf of current turn: ${currentApprover?.name || currentApprover?.email}.`
+                      : "Approve or Reject the request and state reason."}
                   </p>
                   <Field
                     label="Reason"
-                    hint="Required when rejecting; optional when approving."
+                    hint={isAdmin && !isCurrentTurnUser ? "Required for admin override." : "Required when rejecting; optional when approving."}
                   >
                     <Textarea
                       value={reason}
@@ -264,88 +325,97 @@ export default function ApprovalDetailPage() {
                 </Panel>
               )}
 
-              {approval.decisions[0] && (
-                <Panel title="Decision">
-                  <dl className="space-y-3">
-                    <DataItem
-                      label="Outcome"
-                      value={
-                        <Badge
-                          tone={
-                            approval.decisions[0].decision === "APPROVED"
-                              ? "success"
-                              : "danger"
-                          }
-                          dot
-                        >
-                          {approval.decisions[0].decision}
-                        </Badge>
-                      }
-                    />
-                    <DataItem
-                      label="Decided by"
-                      value={approval.decisions[0].decidedBy}
-                    />
-                    {approval.decisions[0].reason && (
-                      <div>
-                        <dt className="ui-section-label">Reason</dt>
-                        <dd className="mt-1 text-base leading-6 text-slate-700">
-                          {approval.decisions[0].reason}
-                        </dd>
-                      </div>
-                    )}
-                  </dl>
+              {isWaitingForOtherTurn && (
+                <Panel title="Decision Status">
+                  <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-amber-900">
+                    <p className="text-sm font-semibold">
+                      Waiting for {currentApprover?.name || currentApprover?.email} to decide first
+                    </p>
+                    <p className="mt-1 text-xs text-amber-700">
+                      Approvals are processed sequentially. It is currently {ordinal(turnIndex + 1)} approver&apos;s turn.
+                    </p>
+                  </div>
+                </Panel>
+              )}
+
+              {approval.decisions.length > 0 && (
+                <Panel title="Decisions">
+                  <ol className="divide-y divide-line">
+                    {approval.decisions.map((d, idx) => (
+                      <li key={d.id} className="py-2.5 first:pt-0 last:pb-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-slate-700">
+                            {hasMultipleApprovers
+                              ? `${ordinal(idx + 1)} Approver Decision`
+                              : "Decision"}
+                          </span>
+                          <Badge tone={d.decision === "APPROVED" ? "success" : "danger"} dot>
+                            {d.decision}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-600">
+                          By: <span className="font-medium">{d.decidedBy}</span>
+                        </div>
+                        {d.reason && (
+                          <p className="mt-1 text-xs italic text-slate-500">
+                            &quot;{d.reason}&quot;
+                          </p>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
                 </Panel>
               )}
 
               <Panel title="Parties">
                 <ul className="space-y-3">
-                  {approval.parties.map((p) => (
-                    <li key={`${p.role}-${p.email}`} className="min-w-0">
-                      <div className="truncate text-base font-medium text-slate-900">
-                        {p.name || p.email}
-                      </div>
-                      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
-                        <Badge tone={ROLE_TONE[p.role] ?? "neutral"} uppercase>
-                          {p.role.toLowerCase()}
-                        </Badge>
-                        <span
-                          className="truncate text-xs text-slate-500"
-                          title={p.email}
-                        >
-                          {p.email}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </Panel>
+                  {approval.parties.map((p) => {
+                    let seqLabel = "";
+                    let statusBadge = null;
+                    if (p.role === "APPROVER") {
+                      const order = p.sequenceOrder ?? approval.approvers.findIndex((a) => a.email.toLowerCase() === p.email.toLowerCase());
+                      seqLabel =
+                        hasMultipleApprovers && order >= 0
+                          ? `${ordinal(order + 1)} approver`
+                          : "approver";
 
-              <Panel title="Classification">
-                <form onSubmit={onSaveMeta} className="space-y-3">
-                  <Field label="Department">
-                    <Input
-                      value={dept}
-                      onChange={(e) => setDept(e.target.value)}
-                      placeholder="e.g. Hardware"
-                    />
-                  </Field>
-                  <Field label="Project">
-                    <Input
-                      value={project}
-                      onChange={(e) => setProject(e.target.value)}
-                      placeholder="e.g. Q3 rollout"
-                    />
-                  </Field>
-                  <Button
-                    type="submit"
-                    variant="secondary"
-                    size="sm"
-                    loading={busy}
-                  >
-                    Save
-                  </Button>
-                </form>
+                      if (order >= 0 && order < approval.decisions.length) {
+                        const d = approval.decisions[order];
+                        statusBadge = (
+                          <Badge tone={d.decision === "APPROVED" ? "success" : "danger"}>
+                            {d.decision === "APPROVED" ? "Approved" : "Rejected"}
+                          </Badge>
+                        );
+                      } else if (order === turnIndex && approval.state === "PENDING_APPROVAL") {
+                        statusBadge = <Badge tone="warning">Current Turn</Badge>;
+                      } else if (approval.state === "PENDING_APPROVAL") {
+                        statusBadge = <Badge tone="neutral">Waiting</Badge>;
+                      }
+                    }
+
+                    return (
+                      <li key={`${p.role}-${p.email}`} className="min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-base font-medium text-slate-900">
+                            {p.name || p.email}
+                          </span>
+                          {statusBadge}
+                        </div>
+                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+                          <Badge tone={ROLE_TONE[p.role] ?? "neutral"} uppercase>
+                            {p.role === "APPROVER" ? seqLabel : p.role.toLowerCase()}
+                          </Badge>
+                          <span
+                            className="truncate text-xs text-slate-500"
+                            title={p.email}
+                          >
+                            {p.email}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
               </Panel>
             </div>
           </div>

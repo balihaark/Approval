@@ -1,7 +1,6 @@
 import { getGmail } from "./client.js";
 import { config } from "../../config.js";
 import { prisma } from "../prisma.js";
-import { logActivity } from "../audit.js";
 
 const WATCH_LABELS = ["INBOX"];
 
@@ -29,12 +28,6 @@ export async function renewGmailWatch(): Promise<{
     where: { id: "default" },
     create: { id: "default", historyId, watchExpiry: expiration },
     update: { historyId: historyId ?? undefined, watchExpiry: expiration },
-  });
-
-  await logActivity({
-    actorEmail: config.gmail.user,
-    action: "gmail.watch.renewed",
-    details: { historyId, expiration: expiration?.toISOString() ?? null },
   });
 
   return { historyId, expiration };

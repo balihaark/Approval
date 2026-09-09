@@ -1,4 +1,3 @@
-import { prisma } from "./prisma.js";
 import { Prisma } from "@prisma/client";
 
 export async function logActivity(input: {
@@ -7,12 +6,8 @@ export async function logActivity(input: {
   action: string;
   details?: Prisma.InputJsonValue;
 }): Promise<void> {
-  await prisma.activityLog.create({
-    data: {
-      approvalId: input.approvalId ?? null,
-      actorEmail: input.actorEmail,
-      action: input.action,
-      details: input.details ?? Prisma.JsonNull,
-    },
+  console.info(`[Activity] ${input.action} by ${input.actorEmail}`, {
+    approvalId: input.approvalId,
+    details: input.details,
   });
 }

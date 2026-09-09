@@ -303,6 +303,15 @@ export function ApprovalList({ view }: { view: ApprovalQuery["view"] }) {
                           {item.project}
                         </Badge>
                       )}
+                      {item.state === "PENDING_APPROVAL" && (() => {
+                        const activeApprover = item.approvers[item.decisions.length];
+                        if (!activeApprover) return null;
+                        return (
+                          <span className="font-medium text-amber-700">
+                            Waiting on: {activeApprover.name || activeApprover.email}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
 
