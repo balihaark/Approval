@@ -18,3 +18,4 @@ tools/
 *.exe
 cloudflared/config.yml
 scripts/ngrok.local.env
+login-auth/
