@@ -1,3 +1,10 @@
+// Employee.employeeId is BIGINT (central_db's emp_id, ~15-16 digits — still
+// within Number.MAX_SAFE_INTEGER but not representable as JSON. Serialize as
+// a string across every response instead of asking each site to convert.)
+(BigInt.prototype as unknown as { toJSON: () => string }).toJSON = function () {
+  return this.toString();
+};
+
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";

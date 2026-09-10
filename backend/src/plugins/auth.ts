@@ -2,13 +2,16 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../lib/prisma.js";
 import { UserRole } from "@prisma/client";
 import { config, SESSION_MAX_AGE_SECONDS } from "../config.js";
+import {
+  getEmployeeById,
+  CentralDbError,
+} from "../services/centralDb.service.js";
 
 export type AuthUser = {
-  id: number;
+  id: bigint;
   email: string;
   name: string;
   role: UserRole;
-  mustChangePassword: boolean;
 };
 
 declare module "@fastify/jwt" {
@@ -37,18 +40,11 @@ declare module "fastify" {
 export const COOKIE_NAME = "approvals_token";
 const OAUTH_STATE_COOKIE = "gmail_oauth_state";
 
-const PASSWORD_CHANGE_PATHS = new Set([
-  "/auth/me",
-  "/auth/logout",
-  "/auth/change-password",
-]);
-
 export async function authenticate(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
   try {
-    // Cookie-only sessions (no Authorization bearer) — reduces token leakage risk
     const token = request.cookies[COOKIE_NAME];
     if (!token) {
       return reply.unauthorized("Authentication required");
@@ -59,8 +55,10 @@ export async function authenticate(
       role: UserRole;
       tv?: number;
     }>(token);
-    const employeeId = Number(payload.sub);
-    if (!Number.isSafeInteger(employeeId)) {
+    let employeeId: bigint;
+    try {
+      employeeId = BigInt(payload.sub);
+    } catch {
       return reply.unauthorized("Invalid or expired session");
     }
     const user = await prisma.employee.findUnique({ where: { employeeId } });
@@ -72,22 +70,39 @@ export async function authenticate(
       clearAuthCookie(reply);
       return reply.unauthorized("Session expired; please sign in again");
     }
+
+    // Fail-closed re-verify against central: HR-side deactivation in central
+    // must revoke approvals access within one request. Matches LMA's
+    // dependencies.verify_token pattern.
+    try {
+      const central = await getEmployeeById(user.employeeId);
+      if (!central || central.is_active === false) {
+        await prisma.employee.update({
+          where: { employeeId: user.employeeId },
+          data: { isActive: false, tokenVersion: { increment: 1 } },
+        });
+        clearAuthCookie(reply);
+        return reply.unauthorized("Account is inactive");
+      }
+    } catch (err) {
+      if (err instanceof CentralDbError) {
+        request.log.error(
+          { err },
+          "central_db unreachable during authenticate"
+        );
+        return reply
+          .code(err.status >= 500 ? err.status : 503)
+          .send({ error: "identity service unavailable" });
+      }
+      throw err;
+    }
+
     request.currentUser = {
       id: user.employeeId,
       email: user.email,
       name: user.name,
       role: user.role,
-      mustChangePassword: user.mustChangePassword,
     };
-
-    const path = request.url.split("?")[0] ?? "";
-    if (
-      user.mustChangePassword &&
-      !PASSWORD_CHANGE_PATHS.has(path) &&
-      request.method.toUpperCase() !== "OPTIONS"
-    ) {
-      return reply.forbidden("Password change required before continuing");
-    }
   } catch {
     return reply.unauthorized("Invalid or expired session");
   }
@@ -143,11 +158,16 @@ export function takeOAuthStateCookie(
 
 export function signSessionToken(
   app: FastifyInstance,
-  user: { employeeId: number; email: string; role: UserRole; tokenVersion: number }
+  user: {
+    employeeId: bigint;
+    email: string;
+    role: UserRole;
+    tokenVersion: number;
+  }
 ): string {
   return app.jwt.sign(
     {
-      sub: String(user.employeeId),
+      sub: user.employeeId.toString(),
       email: user.email,
       role: user.role,
       tv: user.tokenVersion,

@@ -3,7 +3,6 @@ export type User = {
   email: string;
   name: string;
   role: "USER" | "ADMIN";
-  mustChangePassword?: boolean;
 };
 
 export type Party = {
@@ -67,8 +66,6 @@ export type AdminUser = {
   name: string;
   role: "USER" | "ADMIN";
   isActive: boolean;
-  mustChangePassword: boolean;
   lastLoginAt: string | null;
-  lockedUntil: string | null;
   createdAt: string;
 };

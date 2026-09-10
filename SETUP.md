@@ -83,16 +83,13 @@ This:
 npm run dev
 ```
 
-Open **http://localhost:3000**
+Open **http://localhost:3000** and click **Sign in with Login-Auth**. Approvals is SSO-only — a local `central_db` + `Login-Auth` must be running (see the umbrella [../CLAUDE.md](../CLAUDE.md) for how to start them).
 
-| | |
-|---|---|
-| **Admin email** | `admin@blauplug.local` |
-| **Password** | `ChangeMe123!` |
+Your first sign-in creates a `USER` row. To promote yourself to admin:
 
-Change the password when prompted.
-
-The app works at this point **without Gmail** — login, People, UI.
+```powershell
+psql -d approvals -c "UPDATE \"Employee\" SET role='ADMIN' WHERE email='you@blauplug.com';"
+```
 
 ---
 

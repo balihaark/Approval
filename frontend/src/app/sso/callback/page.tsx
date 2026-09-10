@@ -36,10 +36,7 @@ function SsoCallbackContent() {
       try {
         const res = await ssoCallback(token!);
         setUser(res.user);
-        const destination = res.user.mustChangePassword
-          ? "/account/password"
-          : "/received";
-        router.replace(destination);
+        router.replace("/received");
       } catch (err) {
         setError(
           err instanceof Error

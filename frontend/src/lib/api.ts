@@ -64,13 +64,6 @@ export async function api<T>(
   return data as T;
 }
 
-export function login(email: string, password: string) {
-  return api<{ user: User }>("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
-}
-
 export function ssoCallback(token: string) {
   return api<{ user: User }>("/auth/sso/callback", {
     method: "POST",
@@ -84,13 +77,6 @@ export function logout() {
 
 export function me() {
   return api<{ user: User }>("/auth/me");
-}
-
-export function changePassword(currentPassword: string, newPassword: string) {
-  return api<{ user: User }>("/auth/change-password", {
-    method: "POST",
-    body: JSON.stringify({ currentPassword, newPassword }),
-  });
 }
 
 export type ApprovalQuery = {
@@ -203,39 +189,10 @@ export function listUsers() {
       name: string;
       role: "USER" | "ADMIN";
       isActive: boolean;
-      mustChangePassword: boolean;
       lastLoginAt: string | null;
-      lockedUntil: string | null;
       createdAt: string;
     }[];
   }>("/admin/users");
-}
-
-export function createUser(payload: {
-  email: string;
-  name: string;
-  password: string;
-  role?: "USER" | "ADMIN";
-}) {
-  return api("/admin/users", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function patchUser(
-  id: string,
-  payload: {
-    isActive?: boolean;
-    role?: "USER" | "ADMIN";
-    mustChangePassword?: boolean;
-    resetPassword?: string;
-  }
-) {
-  return api(`/admin/users/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  });
 }
 
 export function adminStats() {

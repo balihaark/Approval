@@ -21,7 +21,7 @@ npm run setup    # once — env files, install, migrate, admin
 npm run dev      # every time
 ```
 
-Open **http://localhost:3000** — `admin@blauplug.local` / `ChangeMe123!`
+Open **http://localhost:3000** and sign in via **Login-Auth** (SSO-only, no local password). First user gets `USER`; a dev promotes to `ADMIN` via `UPDATE "Employee" SET role='ADMIN' WHERE email='…';` on the approvals DB.
 
 For Gmail, she follows **docs/ENV_SETUP.md** and pastes **her own** OAuth / refresh token / Pub/Sub secrets.
 

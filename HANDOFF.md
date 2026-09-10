@@ -34,8 +34,26 @@ Header: x-api-key: <CENTRAL_DB_API_KEY>
 
 For each active employee, Central DB must return `emp_id`, `email`, `first_name`, `mobile_number`, `employment_status`, and the app-role fields used by Login-Auth.
 
-## SSO cutover
+## SSO + Central DB (required)
 
-The current Approvals app remains fully functional with local employee login. Set Login-Auth's browser URL through `NEXT_PUBLIC_LOGIN_AUTH_URL` in `frontend/.env.local`. Do not enable Central-DB SSO until Login-Auth and Approvals agree on the token contract: signing algorithm/key distribution, issuer, audience, stable employee identifier, callback URL, and logout/revocation behavior.
+Post 2026-09-09 cutover, Approvals authenticates exclusively via Login-Auth SSO and looks up every employee against Central DB under the `approvals` scope. **Entry is via bpi-main's workspace launcher**, not a standalone button on approvals — see [CLAUDE.md § SSO handoff](CLAUDE.md).
+
+Three coordinated pieces:
+
+1. **Login-Auth** — `Approvals` in the `allowedApps` list inside `generateAppToken`.
+2. **bpi-main** — `NEXT_PUBLIC_APPROVALS_URL` + the Approvals tile in `dashboard/employee/page.js`.
+3. **Approvals** —
+
+   ```dotenv
+   # backend/.env
+   LOGIN_AUTH_JWT_SECRET=<same HS256 secret Login-Auth signs with>
+   CENTRAL_DB_URL=https://central.example.com
+   APPROVALS_API_KEY=<matches central's APPROVALS_API_KEY env var>
+
+   # frontend/.env.local
+   NEXT_PUBLIC_BPI_MAIN_URL=https://blauplug.example.com
+   ```
+
+The per-app JWT minted by Login-Auth carries `email`, `emp_id`, `central_emp_id`, `first_name`, `role`, `appId: "Approvals"`. Approvals only trusts `email` + optional `emp_id`/`central_emp_id`/`first_name`; central is the source of truth for identity + activity. Any `role`/`roles.*` claim is ignored — USER/ADMIN is local and dev-assigned.
 
 Use a production secret manager for all `.env` values. Do not commit `.env` files or Gmail, Central DB, JWT, or MSG91 credentials.

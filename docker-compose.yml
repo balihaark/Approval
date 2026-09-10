@@ -17,5 +17,31 @@ services:
       timeout: 5s
       retries: 10
 
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: approvals-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # env_file loads real secrets at runtime — never bake into the image.
+    # Fall back to backend/.env if the top-level .env isn't there.
+    env_file:
+      - path: ./.env
+        required: false
+      - path: ./backend/.env
+        required: false
+    environment:
+      # Inside the compose network the DB is reachable at hostname `postgres`.
+      # Override this by setting DATABASE_URL in .env if you point at a
+      # managed Postgres instead.
+      DATABASE_URL: postgresql://approvals:approvals@postgres:5432/approvals
+      PORT: "3001"
+      NODE_ENV: production
+    ports:
+      - "3001:3001"
+
 volumes:
   approvals_pgdata:

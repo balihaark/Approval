@@ -1,11 +1,8 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { UserRole } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { hashPassword, verifyPassword } from "../lib/password.js";
-import { assertPasswordPolicy } from "../lib/security.js";
 import {
   authenticate,
   clearAuthCookie,
@@ -15,119 +12,49 @@ import {
 import { normalizeEmail } from "../lib/access.js";
 import { logActivity } from "../lib/audit.js";
 import { config, SESSION_MAX_AGE_SECONDS } from "../config.js";
-
-const MAX_FAILED_ATTEMPTS = 5;
-const LOCK_MINUTES = 15;
-
-const loginSchema = z.object({
-  email: z.string().email().max(320),
-  password: z.string().min(1).max(128),
-});
+import {
+  getEmployeeByEmail,
+  CentralDbError,
+  fullName,
+  CentralEmployee,
+} from "../services/centralDb.service.js";
 
 const ssoCallbackSchema = z.object({
   token: z.string().min(1),
 });
 
-const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1).max(128),
-  newPassword: z.string().min(12).max(128),
-});
+type SsoPayload = {
+  email?: string;
+  emp_id?: number | string;
+  central_emp_id?: number | string;
+  first_name?: string;
+  iss?: string;
+};
+
+function projectedName(central: CentralEmployee, payload: SsoPayload): string {
+  const fromCentral = fullName(central);
+  if (fromCentral) return fromCentral;
+  if (typeof payload.first_name === "string" && payload.first_name.trim() !== "") {
+    return payload.first_name.trim();
+  }
+  return central.email.split("@")[0] || "Employee";
+}
 
 function publicUser(user: {
-  employeeId: number;
+  employeeId: bigint;
   email: string;
   name: string;
-  role: string;
-  mustChangePassword: boolean;
+  role: UserRole;
 }) {
   return {
-    id: String(user.employeeId),
+    id: user.employeeId.toString(),
     email: user.email,
     name: user.name,
     role: user.role,
-    mustChangePassword: user.mustChangePassword,
   };
 }
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
-  app.post(
-    "/auth/login",
-    {
-      config: {
-        rateLimit: {
-          max: 5,
-          timeWindow: "15 minutes",
-        },
-      },
-    },
-    async (request, reply) => {
-      const parsed = loginSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest("Email and password are required");
-      }
-      const email = normalizeEmail(parsed.data.email);
-      const user = await prisma.employee.findUnique({ where: { email } });
-
-      // Constant-ish work when user missing (dummy hash compare)
-      const dummyHash =
-        "$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4.G2oQh.6KzqKzqK";
-      const hash = user?.passwordHash ?? dummyHash;
-      const passwordOk = await verifyPassword(parsed.data.password, hash);
-
-      if (!user || !passwordOk) {
-        if (user && user.isActive) {
-          const attempts = user.failedLoginAttempts + 1;
-          const lockedUntil =
-            attempts >= MAX_FAILED_ATTEMPTS
-              ? new Date(Date.now() + LOCK_MINUTES * 60 * 1000)
-              : user.lockedUntil;
-          await prisma.employee.update({
-            where: { employeeId: user.employeeId },
-            data: {
-              failedLoginAttempts: attempts,
-              lockedUntil,
-            },
-          });
-          await logActivity({
-            actorEmail: email,
-            action: "auth.login.failed",
-            details: { reason: "invalid_credentials", attempts },
-          });
-        }
-        return reply.unauthorized("Invalid email or password");
-      }
-
-      if (!user.isActive) {
-        return reply.unauthorized("Invalid email or password");
-      }
-
-      if (user.lockedUntil && user.lockedUntil > new Date()) {
-        return reply.tooManyRequests(
-          `Account temporarily locked. Try again after ${user.lockedUntil.toISOString()}`
-        );
-      }
-
-      await prisma.employee.update({
-        where: { employeeId: user.employeeId },
-        data: {
-          failedLoginAttempts: 0,
-          lockedUntil: null,
-          lastLoginAt: new Date(),
-        },
-      });
-
-      const token = signSessionToken(app, user);
-      setAuthCookie(reply, token, SESSION_MAX_AGE_SECONDS);
-      await logActivity({
-        actorEmail: user.email,
-        action: "auth.login.success",
-        details: {},
-      });
-
-      return { user: publicUser(user) };
-    }
-  );
-
   app.post(
     "/auth/sso/callback",
     {
@@ -144,13 +71,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         return reply.badRequest("Token is required");
       }
 
-      let payload: any;
+      let payload: SsoPayload;
       try {
         payload = jwt.verify(parsed.data.token, config.loginAuthJwtSecret, {
           algorithms: ["HS256"],
           ...(config.loginAuthIssuer ? { issuer: config.loginAuthIssuer } : {}),
-          ...(config.loginAuthAudience ? { audience: config.loginAuthAudience } : {}),
-        });
+          ...(config.loginAuthAudience
+            ? { audience: config.loginAuthAudience }
+            : {}),
+        }) as SsoPayload;
       } catch {
         return reply.unauthorized("Invalid or expired SSO token");
       }
@@ -161,66 +90,62 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
       const email = normalizeEmail(String(payload.email));
 
-      let role: UserRole = UserRole.USER;
-      if (
-        String(payload.role ?? "").toUpperCase() === "ADMIN" ||
-        String(payload.roles?.approvals ?? "").toUpperCase() === "ADMIN" ||
-        String(payload.roles?.dpps ?? "").toUpperCase() === "ADMIN"
-      ) {
-        role = UserRole.ADMIN;
+      // Central is authoritative for identity + activity gate.
+      // Fail-closed on outage (matches LMA + HR Portal cutover pattern).
+      let central: CentralEmployee | null;
+      try {
+        central = await getEmployeeByEmail(email);
+      } catch (err) {
+        if (err instanceof CentralDbError) {
+          request.log.error({ err }, "central_db unreachable during SSO");
+          return reply
+            .code(err.status >= 500 ? err.status : 503)
+            .send({ error: "identity service unavailable" });
+        }
+        throw err;
       }
 
-      let user = await prisma.employee.findUnique({ where: { email } });
-
-      if (user) {
-        if (!user.isActive) {
-          return reply.unauthorized("Account is inactive");
-        }
-      } else {
-        const empIdFromPayload = Number(payload.emp_id || payload.central_emp_id);
-        let employeeId =
-          Number.isSafeInteger(empIdFromPayload) && empIdFromPayload > 0
-            ? empIdFromPayload
-            : 0;
-
-        const employeeWithId = employeeId
-          ? await prisma.employee.findUnique({ where: { employeeId } })
-          : null;
-        if (employeeWithId && employeeWithId.email !== email) {
-          employeeId = 0;
-        }
-        if (!employeeId) {
-          const maxEmp = await prisma.employee.aggregate({
-            _max: { employeeId: true },
-          });
-          employeeId = (maxEmp._max.employeeId ?? 1000) + 1;
-        }
-
-        const dummyPasswordHash = await hashPassword(crypto.randomUUID());
-        const name =
-          typeof payload.first_name === "string" && payload.first_name.trim() !== ""
-            ? payload.first_name.trim()
-            : email.split("@")[0] || "Employee";
-
-        user = await prisma.employee.create({
-          data: {
-            employeeId,
-            email,
-            name,
-            passwordHash: dummyPasswordHash,
-            role,
-            mustChangePassword: false,
-            tokenVersion: 1,
-            isActive: true,
-          },
+      if (!central) {
+        await logActivity({
+          actorEmail: email,
+          action: "auth.sso.login.rejected",
+          details: { reason: "not_in_central" },
         });
+        return reply.unauthorized("Employee not found in central directory");
       }
 
-      await prisma.employee.update({
-        where: { employeeId: user.employeeId },
-        data: {
-          failedLoginAttempts: 0,
-          lockedUntil: null,
+      // Central computes is_active from employment_status + exit_date; trust it.
+      if (central.is_active === false) {
+        await logActivity({
+          actorEmail: email,
+          action: "auth.sso.login.rejected",
+          details: { reason: "inactive_in_central" },
+        });
+        return reply.unauthorized("Account is inactive");
+      }
+
+      const empId = BigInt(central.emp_id);
+      const projectedEmail = normalizeEmail(central.email);
+      const name = projectedName(central, payload);
+
+      // Upsert local projection. Preserve locally-managed `role` on re-login
+      // (see decision_approvals_admin_manual — ADMIN is set by dev SQL, not
+      // by anything in the SSO payload or central).
+      const user = await prisma.employee.upsert({
+        where: { employeeId: empId },
+        create: {
+          employeeId: empId,
+          email: projectedEmail,
+          name,
+          role: UserRole.USER,
+          isActive: true,
+          lastLoginAt: new Date(),
+          tokenVersion: 1,
+        },
+        update: {
+          email: projectedEmail,
+          name,
+          isActive: true,
           lastLoginAt: new Date(),
         },
       });
@@ -233,7 +158,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         action: "auth.sso.login.success",
         details: {
           issuer: payload.iss || "login-auth",
-          empId: payload.emp_id || payload.central_emp_id || null,
+          empId: user.employeeId.toString(),
         },
       });
 
@@ -247,8 +172,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     try {
       if (token) {
         const payload = app.jwt.verify<{ sub: string; email: string }>(token);
+        const employeeId = BigInt(payload.sub);
         await prisma.employee.update({
-          where: { employeeId: Number(payload.sub) },
+          where: { employeeId },
           data: { tokenVersion: { increment: 1 } },
         });
         await logActivity({
@@ -258,7 +184,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         });
       }
     } catch {
-      // ignore invalid cookie on logout
+      // invalid cookie on logout is fine — the client is asking to be logged out anyway
     }
     return { ok: true };
   });
@@ -267,58 +193,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     return {
       user: publicUser({
         employeeId: request.currentUser.id,
-        ...request.currentUser,
+        email: request.currentUser.email,
+        name: request.currentUser.name,
+        role: request.currentUser.role,
       }),
     };
   });
-
-  app.post(
-    "/auth/change-password",
-    { preHandler: authenticate },
-    async (request, reply) => {
-      const parsed = changePasswordSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.badRequest("Current and new password are required");
-      }
-      const policyError = assertPasswordPolicy(parsed.data.newPassword);
-      if (policyError) return reply.badRequest(policyError);
-
-      const user = await prisma.employee.findUnique({
-        where: { employeeId: request.currentUser.id },
-      });
-      if (!user) return reply.unauthorized("User not found");
-
-      const ok = await verifyPassword(
-        parsed.data.currentPassword,
-        user.passwordHash
-      );
-      if (!ok) return reply.unauthorized("Current password is incorrect");
-
-      if (parsed.data.currentPassword === parsed.data.newPassword) {
-        return reply.badRequest("New password must be different");
-      }
-
-      const passwordHash = await hashPassword(parsed.data.newPassword);
-      const updated = await prisma.employee.update({
-        where: { employeeId: user.employeeId },
-        data: {
-          passwordHash,
-          mustChangePassword: false,
-          tokenVersion: { increment: 1 },
-          failedLoginAttempts: 0,
-          lockedUntil: null,
-        },
-      });
-
-      const token = signSessionToken(app, updated);
-      setAuthCookie(reply, token, SESSION_MAX_AGE_SECONDS);
-      await logActivity({
-        actorEmail: user.email,
-        action: "auth.password.changed",
-        details: {},
-      });
-
-      return { user: publicUser(updated) };
-    }
-  );
 }

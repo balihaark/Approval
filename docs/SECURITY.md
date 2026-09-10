@@ -4,23 +4,22 @@ Org-oriented controls built into the Approvals App.
 
 ## Authentication & sessions
 
-- Email/password login with **bcrypt** (12 rounds)
-- **HttpOnly** session cookie (`approvals_token`); no bearer tokens in the browser
-- Session lifetime **12 hours** (`SESSION_MAX_AGE_SECONDS`)
-- Cookie includes `tokenVersion`; logout / password change / deactivate **invalidate** old sessions
-- Inactive users cannot authenticate
-- After **5 failed logins**, account locks for **15 minutes**
-- Login rate limit: **5 attempts / 15 minutes** per IP
-- New users and bootstrap admin: **must change password** before using the app
-- Password policy: 12+ chars, upper + lower + number + symbol; common phrases blocked
+- **SSO-only** via Login-Auth ↔ central_db. No local password path.
+- Login-Auth mints an **HS256 JWT**; approvals verifies with `LOGIN_AUTH_JWT_SECRET` and optional `iss` / `aud` enforcement.
+- After JWT verify, approvals looks the employee up in **central_db** under the `approvals` scope. Not present → 401. Not active → 401. Central unreachable → 503 (fail-closed, matches LMA + HR Portal).
+- Every authenticated request re-verifies `is_active` against central. HR-side deactivation revokes access within one request.
+- **HttpOnly** session cookie (`approvals_token`); no bearer tokens in the browser.
+- Session lifetime **12 hours** (`SESSION_MAX_AGE_SECONDS`).
+- Cookie includes `tokenVersion`; logout / central-side deactivation **invalidate** old sessions.
+- Rate limit: **10 SSO callbacks / minute** per IP; global **~120 req/min** in production.
 
 ## Authorization
 
-- Party-only access to approvals (requester / approver / participant)
-- Admin override for decide requires a **reason** and is audited
-- Admin APIs and UI gated (`requireAdmin` + `AdminOnly`)
-- Cannot deactivate yourself or remove the **last admin**
-- Email simulation (`/admin/simulate-email`) **disabled in production**
+- Party-only access to approvals (requester / approver / participant).
+- Admin override for decide requires a **reason** and is audited.
+- Admin APIs and UI gated (`requireAdmin` + `AdminOnly`).
+- USER/ADMIN is a local, dev-assigned distinction on the approvals DB. Central holds no `approvals_role`; SSO claims are never used to elevate.
+- Email simulation (`/admin/simulate-email`) **disabled in production**.
 
 ## API hardening
 
@@ -36,8 +35,8 @@ Org-oriented controls built into the Approvals App.
 ## Data
 
 - Source of truth: PostgreSQL (`Approval`, `Party`, `Decision`, `ActivityLog`, …)
-- Passwords never stored in plaintext
-- Activity log records login success/failure, user admin changes, decisions
+- No passwords stored at all (SSO-only)
+- Activity log records SSO login success/failure, decisions, admin actions
 
 ## Operator checklist
 

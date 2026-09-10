@@ -40,19 +40,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (loading) return;
     const isLogin = pathname === "/login";
-    const isPassword = pathname === "/account/password";
-    if (!user && !isLogin) {
+    const isSsoCallback = pathname?.startsWith("/sso/");
+    if (!user && !isLogin && !isSsoCallback) {
       router.replace("/login");
       return;
     }
     if (user && isLogin) {
-      router.replace(
-        user.mustChangePassword ? "/account/password" : "/received"
-      );
-      return;
-    }
-    if (user?.mustChangePassword && !isPassword && !isLogin) {
-      router.replace("/account/password");
+      router.replace("/received");
     }
   }, [user, loading, pathname, router]);
 

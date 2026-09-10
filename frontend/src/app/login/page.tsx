@@ -1,42 +1,22 @@
 "use client";
 
-import { FormEvent, useState } from "react";
 import { Plug } from "lucide-react";
-import { login } from "@/lib/api";
 import { useAuth } from "@/components/AuthProvider";
-import { Alert, Button, Field, Input, Spinner } from "@/components/ui";
+import { Button, Spinner } from "@/components/ui";
 
 export default function LoginPage() {
-  const { setUser, user, loading } = useAuth();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { user, loading } = useAuth();
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await login(email, password);
-      setUser(res.user);
-      window.location.assign(
-        res.user.mustChangePassword ? "/account/password" : "/received"
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function onSsoClick() {
-    const loginAuthUrl =
-      process.env.NEXT_PUBLIC_LOGIN_AUTH_URL || "http://localhost:3002";
-    const returnUrl = encodeURIComponent(
-      `${window.location.origin}/sso/callback`
-    );
-    window.location.assign(`${loginAuthUrl}?returnUrl=${returnUrl}`);
+  function onWorkspaceClick() {
+    // Approvals is entered through the bpi-main workspace launcher — not a
+    // standalone Login-Auth button. The launcher (/dashboard/employee) opens
+    // /app-verify?appId=Approvals&appUrl=<approvals>/sso/callback, exchanges
+    // the main SSO token for a per-app JWT via Login-Auth /auth/generate-app-token
+    // (Approvals must be in that whitelist), then redirects back here with
+    // ?token=<JWT> which /sso/callback verifies.
+    const workspaceUrl =
+      process.env.NEXT_PUBLIC_BPI_MAIN_URL || "https://blauplug.company";
+    window.location.assign(`${workspaceUrl}/dashboard/employee`);
   }
 
   if (loading || user) {
@@ -49,7 +29,7 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4 py-12">
-      <div className="w-full max-w-[400px]">
+      <div className="w-full max-w-[420px]">
         <div className="mb-6 flex items-center gap-2.5">
           <div className="flex h-9 w-9 items-center justify-center rounded bg-brand-500 text-white">
             <Plug size={18} strokeWidth={2.25} aria-hidden />
@@ -59,68 +39,31 @@ export default function LoginPage() {
               BlauPlug Approvals
             </div>
             <div className="text-sm text-slate-500">
-              Sign in with your work account
+              Sign in from your BlauPlug workspace
             </div>
           </div>
         </div>
 
-        <form
-          onSubmit={onSubmit}
-          className="rounded-lg border border-line bg-surface p-6 shadow-card"
-        >
+        <div className="rounded-lg border border-line bg-surface p-6 shadow-card">
+          <p className="mb-4 text-sm leading-6 text-slate-600">
+            Approvals opens through your BlauPlug workspace. Sign in there,
+            then click the <strong>Approvals</strong> tile — you&rsquo;ll be
+            asked for your 6-digit authenticator code and dropped straight
+            back into the app.
+          </p>
           <Button
             type="button"
-            variant="secondary"
             size="lg"
-            className="w-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-            onClick={onSsoClick}
+            className="w-full"
+            onClick={onWorkspaceClick}
           >
-            Sign in with Login-Auth
+            Open BlauPlug workspace
           </Button>
-
-          <div className="my-4 flex items-center gap-3">
-            <div className="h-px flex-1 bg-slate-200" />
-            <span className="text-xs font-medium text-slate-400">OR</span>
-            <div className="h-px flex-1 bg-slate-200" />
-          </div>
-
-          <div className="space-y-4">
-            <Field label="Work email">
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                required
-                autoComplete="username"
-                autoFocus
-              />
-            </Field>
-            <Field label="Password">
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-              />
-            </Field>
-          </div>
-
-          {error && (
-            <div className="mt-4">
-              <Alert variant="error">{error}</Alert>
-            </div>
-          )}
-
-          <Button type="submit" size="lg" className="mt-5 w-full" loading={busy}>
-            {busy ? "Signing in…" : "Sign in"}
-          </Button>
-        </form>
+        </div>
 
         <p className="mt-4 text-center text-xs leading-5 text-slate-500">
-          Accounts are created by an administrator under People. Sessions last
-          12 hours.
+          Accounts are managed in the central directory. Contact HR if you
+          need access. Sessions last 12 hours.
         </p>
       </div>
     </div>

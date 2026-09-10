@@ -30,23 +30,22 @@ enum DecisionOutcome {
   REJECTED
 }
 
-// Identity projection from Login-Auth (future SSO integration).
-// NOT used for login right now — login goes through the User table above.
-// Keep this model in place as groundwork for the planned Employee/SSO integration.
+// Local projection of central_db's employee identity. SSO is the only path
+// that populates this table — see routes/auth.ts. `employeeId` is central's
+// BIGINT emp_id. `role` (USER/ADMIN) is a local-only distinction, set by a
+// dev running SQL directly on the approvals DB (see
+// decision_approvals_admin_manual memory) — nothing in the SSO payload or
+// central directory writes it.
 model Employee {
-  employeeId          Int      @id
-  email               String   @unique
-  name                String
-  passwordHash        String
-  role                UserRole @default(USER)
-  isActive            Boolean  @default(true)
-  tokenVersion        Int      @default(0)
-  failedLoginAttempts Int      @default(0)
-  lockedUntil         DateTime?
-  mustChangePassword  Boolean  @default(false)
-  lastLoginAt         DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  employeeId   BigInt    @id
+  email        String    @unique
+  name         String
+  role         UserRole  @default(USER)
+  isActive     Boolean   @default(true)
+  tokenVersion Int       @default(0)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 model Approval {

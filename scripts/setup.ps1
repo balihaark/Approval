@@ -79,8 +79,9 @@ Write-Host ""
 Write-Host "Next: start the app" -ForegroundColor White
 Write-Host "  npm run dev" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Then open http://localhost:3000" -ForegroundColor White
-Write-Host "  Admin login: admin@blauplug.local / ChangeMe123!" -ForegroundColor DarkGray
-Write-Host "  (Change password on first login.)" -ForegroundColor DarkGray
+Write-Host "Then open http://localhost:3000 and click 'Sign in with Login-Auth' — SSO-only." -ForegroundColor White
+Write-Host "  Ensure central_db + Login-Auth are running and APPROVALS_API_KEY / LOGIN_AUTH_JWT_SECRET are set in backend/.env." -ForegroundColor DarkGray
+Write-Host "  First user gets USER; promote yourself to ADMIN via:" -ForegroundColor DarkGray
+Write-Host "    psql -d approvals -c \"UPDATE `"Employee`" SET role='ADMIN' WHERE email='you@blauplug.com';\"" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Gmail is optional — see docs/ENV_SETUP.md to create your own Google OAuth, tokens, and Pub/Sub." -ForegroundColor DarkGray

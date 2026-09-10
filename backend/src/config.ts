@@ -85,6 +85,8 @@ export const config = {
     "DATABASE_URL",
     "postgresql://approvals:approvals@localhost:5432/approvals"
   ),
+  centralDbUrl: optional("CENTRAL_DB_URL", "http://127.0.0.1:8000"),
+  approvalsApiKey: optional("APPROVALS_API_KEY"),
   /** Allow admin email simulation only outside production */
   allowSimulateEmail: !isProd && optional("ALLOW_SIMULATE_EMAIL", "true") === "true",
   gmail: {
