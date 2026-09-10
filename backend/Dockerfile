@@ -7,12 +7,15 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
-# Copy manifests first so `npm ci` layer caches until deps change.
+# Copy manifests first so the install layer caches until deps change.
 COPY package.json package-lock.json* ./
 
 # Some Prisma internals rely on openssl at install time.
+# Use `npm ci` when a lockfile exists (reproducible); fall back to `npm install`
+# otherwise so the build still works on hosts without a committed lockfile.
 RUN apk add --no-cache openssl \
- && npm ci --no-audit --no-fund
+ && if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
+    else npm install --no-audit --no-fund; fi
 
 # Copy prisma schema (needed for `prisma generate` postinstall) + source.
 COPY prisma ./prisma
