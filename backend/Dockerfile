@@ -10,14 +10,18 @@ WORKDIR /app
 # Copy manifests first so the install layer caches until deps change.
 COPY package.json package-lock.json* ./
 
-# Some Prisma internals rely on openssl at install time.
-# Use `npm ci` when a lockfile exists (reproducible); fall back to `npm install`
-# otherwise so the build still works on hosts without a committed lockfile.
+# Install deps WITHOUT running postinstall — Prisma's `postinstall` calls
+# `prisma generate`, which needs prisma/schema.prisma. We haven't COPY'd
+# the schema yet (that would kill the manifests-only cache layer), so we
+# skip scripts here and run `prisma generate` explicitly below.
 RUN apk add --no-cache openssl \
- && if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
-    else npm install --no-audit --no-fund; fi
+ && if [ -f package-lock.json ]; then \
+      npm ci --no-audit --no-fund --ignore-scripts; \
+    else \
+      npm install --no-audit --no-fund --ignore-scripts; \
+    fi
 
-# Copy prisma schema (needed for `prisma generate` postinstall) + source.
+# Now that deps are installed, bring in prisma + source and finish the build.
 COPY prisma ./prisma
 COPY src ./src
 COPY tsconfig.json ./
@@ -25,22 +29,23 @@ COPY tsconfig.json ./
 RUN npx prisma generate \
  && npm run build
 
-# Prune dev deps for a smaller runtime layer.
-RUN npm prune --omit=dev
-
 
 # ---- 2. runtime stage -------------------------------------------------------
 FROM node:22-alpine AS runtime
 
 WORKDIR /app
 
-# Prisma's query engine needs openssl.
+# Prisma's query engine needs openssl at runtime. `tini` reaps zombies so
+# Fastify's graceful-shutdown handling actually gets SIGTERM.
 RUN apk add --no-cache openssl tini
 
 ENV NODE_ENV=production
 ENV PORT=3001
 
-# Pull compiled JS + pruned node_modules + Prisma schema/migrations.
+# Full node_modules (with Prisma client + CLI) + compiled JS + Prisma schema.
+# Not pruning devDeps because the CMD below calls `npx prisma migrate deploy`
+# which needs the prisma CLI; keeping the image self-contained is worth the
+# ~50MB.
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
@@ -51,7 +56,6 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -q -O - http://localhost:3001/health >/dev/null || exit 1
 
-# Run migrations on start, then launch the server. `tini` reaps zombies so
-# Fastify's graceful-shutdown handling actually gets SIGTERM.
+# Migrations first, then boot Fastify. tini keeps SIGTERM propagation clean.
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
