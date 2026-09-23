@@ -1,71 +1,78 @@
-"use client";
+'use client';
 
-import { Plug } from "lucide-react";
-import { useAuth } from "@/components/AuthProvider";
-import { Button, Spinner } from "@/components/ui";
+import { Suspense, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useAuth } from '@/components/AuthProvider';
 
-export default function LoginPage() {
+function LoginContent() {
   const { user, loading } = useAuth();
+  const searchParams = useSearchParams();
 
-  function onWorkspaceClick() {
-    // Approvals is entered through the bpi-main workspace launcher — not a
-    // standalone Login-Auth button. The launcher (/dashboard/employee) opens
-    // /app-verify?appId=Approvals&appUrl=<approvals>/sso/callback, exchanges
-    // the main SSO token for a per-app JWT via Login-Auth /auth/generate-app-token
-    // (Approvals must be in that whitelist), then redirects back here with
-    // ?token=<JWT> which /sso/callback verifies.
-    const workspaceUrl =
-      process.env.NEXT_PUBLIC_BPI_MAIN_URL || "https://blauplug.company";
-    window.location.assign(`${workspaceUrl}/dashboard/employee`);
-  }
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.clear();
+      sessionStorage.clear();
+    }
 
-  if (loading || user) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-canvas">
-        <Spinner label="Loading…" />
-      </div>
-    );
-  }
+    if (loading) return;
+
+    const isForce = searchParams.get('force') === 'true' || searchParams.get('logout') === 'true';
+
+    if (user && !isForce) {
+      window.location.href = '/received';
+      return;
+    }
+
+    const loginAuthBase =
+      process.env.NEXT_PUBLIC_LOGIN_AUTH_URL || 'http://localhost:3002';
+    const appBase =
+      process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const returnUrl = encodeURIComponent(`${appBase}/sso/callback`);
+
+    const forceQuery = isForce ? '&force=true' : '';
+    window.location.href = `${loginAuthBase}/?returnUrl=${returnUrl}${forceQuery}`;
+  }, [user, loading, searchParams]);
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4 py-12">
-      <div className="w-full max-w-[420px]">
-        <div className="mb-6 flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded bg-brand-500 text-white">
-            <Plug size={18} strokeWidth={2.25} aria-hidden />
-          </div>
-          <div>
-            <div className="text-lg font-semibold tracking-tightish text-slate-900">
-              BlauPlug Approvals
-            </div>
-            <div className="text-sm text-slate-500">
-              Sign in from your BlauPlug workspace
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-line bg-surface p-6 shadow-card">
-          <p className="mb-4 text-sm leading-6 text-slate-600">
-            Approvals opens through your BlauPlug workspace. Sign in there,
-            then click the <strong>Approvals</strong> tile — you&rsquo;ll be
-            asked for your 6-digit authenticator code and dropped straight
-            back into the app.
-          </p>
-          <Button
-            type="button"
-            size="lg"
-            className="w-full"
-            onClick={onWorkspaceClick}
-          >
-            Open BlauPlug workspace
-          </Button>
-        </div>
-
-        <p className="mt-4 text-center text-xs leading-5 text-slate-500">
-          Accounts are managed in the central directory. Contact HR if you
-          need access. Sessions last 12 hours.
-        </p>
-      </div>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        fontFamily: 'sans-serif',
+        gap: '1rem',
+      }}
+    >
+      <p style={{ color: '#64748b', fontSize: '1rem' }}>
+        Connecting to Central Login...
+      </p>
     </div>
   );
 }
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            height: '100vh',
+            fontFamily: 'sans-serif',
+          }}
+        >
+          <p style={{ color: '#64748b' }}>Connecting to Central Login...</p>
+        </div>
+      }
+    >
+      <LoginContent />
+    </Suspense>
+  );
+}
+
+
+

@@ -34,10 +34,23 @@ function SsoCallbackContent() {
 
     async function handleSso() {
       try {
+        if (typeof window !== "undefined") {
+          localStorage.clear();
+          sessionStorage.clear();
+        }
+
         const res = await ssoCallback(token!);
-        setUser(res.user);
+        if (res?.user) {
+          setUser(res.user);
+        }
+
         router.replace("/received");
       } catch (err) {
+        console.error("SSO Callback error:", err);
+        if (typeof window !== "undefined") {
+          localStorage.clear();
+          sessionStorage.clear();
+        }
         setError(
           err instanceof Error
             ? err.message

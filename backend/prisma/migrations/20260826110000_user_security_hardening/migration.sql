@@ -1,7 +1,0 @@
--- AlterTable
-ALTER TABLE "User" ADD COLUMN     "isActive" BOOLEAN NOT NULL DEFAULT true;
-ALTER TABLE "User" ADD COLUMN     "tokenVersion" INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE "User" ADD COLUMN     "failedLoginAttempts" INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE "User" ADD COLUMN     "lockedUntil" TIMESTAMP(3);
-ALTER TABLE "User" ADD COLUMN     "mustChangePassword" BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE "User" ADD COLUMN     "lastLoginAt" TIMESTAMP(3);

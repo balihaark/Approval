@@ -1,5 +1,15 @@
 import { gmail_v1 } from "googleapis";
 import { getGmail, GMAIL_USER } from "./client.js";
+import { prisma } from "../prisma.js";
+
+export async function getApprovalChain(approvalId: string): Promise<string> {
+  const decisions = await prisma.decision.findMany({
+    where: { approvalId, decision: "APPROVED" },
+    orderBy: { decidedAt: "asc" },
+    select: { decidedBy: true },
+  });
+  return decisions.map((d) => d.decidedBy).join(", ");
+}
 
 function encodeSubject(subject: string): string {
   if (/^[\x20-\x7E]*$/.test(subject)) return subject;
@@ -105,3 +115,130 @@ export async function sendNewApprovalEmail(input: {
 
   return { gmailMessageId, threadId, messageIdHeader };
 }
+
+export async function sendApprovalEmail(
+  approval: { id: string; subject: string; body: string },
+  toEmail: string
+): Promise<{ threadId: string; id: string }> {
+  const sentMessage = await sendNewApprovalEmail({
+    to: [toEmail],
+    cc: [],
+    subject: `[APPROVAL] ${approval.subject}`,
+    body: approval.body,
+  });
+
+  // Save threadId immediately to match replies later!
+  await prisma.approval.update({
+    where: { id: approval.id },
+    data: { gmailThreadId: sentMessage.threadId }
+  });
+
+  return {
+    threadId: sentMessage.threadId,
+    id: sentMessage.gmailMessageId,
+  };
+}
+
+export async function sendNextApproverEmail(
+  approval: { id: string; subject: string; messageId?: string | null },
+  nextEmail: string,
+  threadId: string
+): Promise<void> {
+  await sendThreadReply({
+    threadId: threadId,
+    inReplyTo: approval.messageId ?? null,
+    references: approval.messageId ?? null,
+    to: [nextEmail],
+    cc: [],
+    subject: `Re: [APPROVAL] ${approval.subject}`,
+    body: `Your approval is required for: ${approval.subject}\n\nPlease reply with 'APPROVED' or 'REJECTED'.`,
+  });
+}
+
+export async function sendFinalApprovalEmail(
+  approval: { id: string; subject: string; messageId?: string | null; parties?: Array<{ email: string; role: string }> },
+  threadId: string
+): Promise<void> {
+  const requester = approval.parties?.find((p) => p.role === "REQUESTER");
+  const others = approval.parties?.filter((p) => p.role !== "REQUESTER").map((p) => p.email) ?? [];
+  const approvalChain = await getApprovalChain(approval.id);
+
+  await sendThreadReply({
+    threadId: threadId,
+    inReplyTo: approval.messageId ?? null,
+    references: approval.messageId ?? null,
+    to: requester ? [requester.email] : others.slice(0, 1),
+    cc: others,
+    subject: approval.subject,
+    body: `This approval request has been APPROVED.\n\nApproved by: ${approvalChain}\n\nSubject: ${approval.subject}`,
+  });
+}
+
+export async function sendRejectionEmail(
+  approval: { id: string; subject: string; messageId?: string | null; parties?: Array<{ email: string; role: string }> },
+  rejectorEmail: string,
+  threadId: string,
+  reason?: string | null
+): Promise<void> {
+  const requester = approval.parties?.find((p) => p.role === "REQUESTER");
+  const others = approval.parties?.filter((p) => p.role !== "REQUESTER").map((p) => p.email) ?? [];
+  const reasonLine = reason ? `\n\nReason: ${reason}` : "";
+
+  await sendThreadReply({
+    threadId: threadId,
+    inReplyTo: approval.messageId ?? null,
+    references: approval.messageId ?? null,
+    to: requester ? [requester.email] : others.slice(0, 1),
+    cc: others,
+    subject: approval.subject,
+    body: `This approval request has been REJECTED by ${rejectorEmail}.${reasonLine}\n\nSubject: ${approval.subject}`,
+  });
+}
+
+export async function sendClarificationEmail(
+  threadId: string,
+  approverEmail: string
+): Promise<void> {
+  await sendThreadReply({
+    threadId: threadId,
+    inReplyTo: null,
+    references: null,
+    to: [approverEmail],
+    cc: [],
+    subject: "Clarification Needed - Approval Decision",
+    body: "We could not clear your decision from your reply. Please reply with 'APPROVED' or 'REJECTED' (optional: 'APPROVED: your reason').",
+  });
+}
+
+export async function sendNotYourTurnEmail(
+  threadId: string,
+  approverEmail: string,
+  expectedApprover: string
+): Promise<void> {
+  await sendThreadReply({
+    threadId: threadId,
+    inReplyTo: null,
+    references: null,
+    to: [approverEmail],
+    cc: [],
+    subject: "Action Not Required Yet - Out of Turn",
+    body: `It is not your turn to decide on this approval yet. Currently waiting on ${expectedApprover} to act first.`,
+  });
+}
+
+export async function sendAlreadyDecidedEmail(
+  threadId: string,
+  approverEmail: string,
+  currentState: string
+): Promise<void> {
+  await sendThreadReply({
+    threadId: threadId,
+    inReplyTo: null,
+    references: null,
+    to: [approverEmail],
+    cc: [],
+    subject: "Approval Already Finalized",
+    body: `This approval request has already been finalized (Status: ${currentState}). No further replies are accepted.`,
+  });
+}
+

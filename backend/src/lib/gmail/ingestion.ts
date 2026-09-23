@@ -6,9 +6,23 @@ import {
   parseGmailMessage,
   partiesFromParsed,
   summarizeBody,
+  isEmailReply,
+  extractDecisionFromReply,
 } from "./parser.js";
+import {
+  sendNextApproverEmail,
+  sendFinalApprovalEmail,
+  sendRejectionEmail,
+  sendClarificationEmail,
+  sendNotYourTurnEmail,
+  sendAlreadyDecidedEmail,
+} from "./reply.js";
 import { config } from "../../config.js";
 import { normalizeEmail } from "../access.js";
+
+const isValidSenderDomain = (senderEmail: string): boolean => {
+  return senderEmail.endsWith('@blauplug.com');
+};
 
 function quarantineReason(parsed: ParsedMessage): string | null {
   if (!parsed.gmailMessageId || !parsed.threadId) {
@@ -22,6 +36,10 @@ function quarantineReason(parsed: ParsedMessage): string | null {
   }
   if (!parsed.from) {
     return "Missing From address";
+  }
+  if (!isValidSenderDomain(parsed.from.email)) {
+    console.warn(`Blocking email from ${parsed.from.email} - only @blauplug.com senders allowed`);
+    return "Invalid sender domain";
   }
   if (parsed.to.length === 0) {
     return "No To recipients — cannot determine an approver";
@@ -66,6 +84,233 @@ async function markProcessed(parsed: ParsedMessage): Promise<void> {
     },
     update: {},
   });
+}
+
+export async function findApprovalByThreadId(threadId: string, approverEmail: string) {
+  const normEmail = normalizeEmail(approverEmail);
+  const approval = await prisma.approval.findFirst({
+    where: {
+      OR: [{ gmailThreadId: threadId }, { threadId: threadId }],
+      state: ApprovalState.PENDING_APPROVAL,
+      parties: {
+        some: {
+          email: { equals: normEmail, mode: "insensitive" },
+          role: PartyRole.APPROVER,
+        },
+      },
+      nextApprover: { equals: normEmail, mode: "insensitive" },
+    },
+    include: {
+      parties: true,
+      decisions: { orderBy: { decidedAt: "asc" } },
+    },
+  });
+  return approval;
+}
+
+export async function handleApprovedDecision(
+  approval: any,
+  approverEmail: string,
+  threadId: string
+): Promise<void> {
+  const approvers = approval.parties
+    .filter((p: any) => p.role === PartyRole.APPROVER)
+    .sort((a: any, b: any) => (a.sequenceOrder ?? 0) - (b.sequenceOrder ?? 0));
+
+  const currentTurn = approval.decisions.length;
+  const isLastApprover = currentTurn === approvers.length - 1;
+  const nextApproverObj = isLastApprover ? null : approvers[currentTurn + 1];
+  const newState = isLastApprover ? ApprovalState.APPROVED : ApprovalState.PENDING_APPROVAL;
+
+  // 1. Do DB work in transaction
+  await prisma.$transaction(async (tx) => {
+    await tx.decision.create({
+      data: {
+        approvalId: approval.id,
+        decision: "APPROVED",
+        decidedBy: approverEmail,
+      },
+    });
+
+    await tx.approval.update({
+      where: { id: approval.id },
+      data: {
+        state: newState,
+        nextApprover: nextApproverObj ? normalizeEmail(nextApproverObj.email) : null,
+        lastActivityAt: new Date(),
+      },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        approvalId: approval.id,
+        actorEmail: approverEmail,
+        action: "approval.approved.via_email",
+      },
+    });
+  });
+
+  console.log(`[EMAIL] Decision created: APPROVED`);
+  console.log(`[EMAIL] State updated: ${newState}`);
+
+  // 2. AFTER transaction succeeds, send email
+  if (nextApproverObj) {
+    console.log(`[EMAIL] Notification sent to: ${nextApproverObj.email}`);
+    await sendNextApproverEmail(approval, nextApproverObj.email, threadId);
+  } else {
+    console.log(`[EMAIL] Notification sent to: REQUESTER (Final Approved)`);
+    await sendFinalApprovalEmail(approval, threadId);
+  }
+}
+
+export async function handleRejectedDecision(
+  approval: any,
+  approverEmail: string,
+  threadId: string,
+  reason: string | null
+): Promise<void> {
+  // 1. Do DB work in transaction
+  await prisma.$transaction(async (tx) => {
+    await tx.decision.create({
+      data: {
+        approvalId: approval.id,
+        decision: "REJECTED",
+        reason: reason || "Rejected via email reply",
+        decidedBy: approverEmail,
+      },
+    });
+
+    await tx.approval.update({
+      where: { id: approval.id },
+      data: {
+        state: ApprovalState.REJECTED,
+        nextApprover: null,
+        lastActivityAt: new Date(),
+      },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        approvalId: approval.id,
+        actorEmail: approverEmail,
+        action: "approval.rejected.via_email",
+        details: { reason },
+      },
+    });
+  });
+
+  console.log(`[EMAIL] Decision created: REJECTED`);
+  console.log(`[EMAIL] State updated: REJECTED`);
+
+  // 2. AFTER transaction succeeds, send email
+  console.log(`[EMAIL] Notification sent to: REQUESTER (Rejected)`);
+  await sendRejectionEmail(approval, approverEmail, threadId, reason);
+}
+
+export async function handleApprovalReply(parsed: ParsedMessage): Promise<void> {
+  const threadId = parsed.threadId;
+  const approverEmail = parsed.from?.email || "";
+  const normEmail = normalizeEmail(approverEmail);
+
+  console.log(`[EMAIL] Processing reply to thread: ${threadId}`);
+  console.log(`[EMAIL] From: ${approverEmail}`);
+
+  try {
+    // 1. Check duplicate message
+    const existingProcessed = await prisma.processedMessage.findUnique({
+      where: { gmailMessageId: parsed.gmailMessageId },
+    });
+    if (existingProcessed) {
+      console.log(`[EMAIL] Duplicate message skipped: ${parsed.gmailMessageId}`);
+      return;
+    }
+
+    // 2. Email domain validation
+    if (!isValidSenderDomain(approverEmail)) {
+      console.warn(`[EMAIL] Reply from non-company email: ${approverEmail}`);
+      await sendClarificationEmail(threadId, approverEmail);
+      return;
+    }
+
+    // 3. Extract decision
+    const { decision, confidence, reason } = extractDecisionFromReply(parsed.bodyText);
+    console.log(`[EMAIL] Decision extracted: ${decision} (confidence: ${confidence})`);
+
+    if (!decision || confidence < 0.6) {
+      console.warn(`[EMAIL] Decision unclear for thread ${threadId}`);
+      await sendClarificationEmail(threadId, approverEmail);
+      return;
+    }
+
+    // 4. Find approval
+    const approval = await findApprovalByThreadId(threadId, normEmail);
+    console.log(`[EMAIL] Approval found: ${approval?.id || "NOT FOUND"}`);
+
+    if (!approval) {
+      const existingThread = await prisma.approval.findFirst({
+        where: { OR: [{ gmailThreadId: threadId }, { threadId: threadId }] },
+        include: { parties: true },
+      });
+
+      if (existingThread && existingThread.state !== ApprovalState.PENDING_APPROVAL) {
+        await sendAlreadyDecidedEmail(threadId, approverEmail, existingThread.state);
+        return;
+      }
+
+      if (existingThread && existingThread.nextApprover && existingThread.nextApprover.toLowerCase() !== normEmail.toLowerCase()) {
+        console.warn(`[EMAIL] Validation: ${normEmail} == ${existingThread.nextApprover}?`);
+        await sendNotYourTurnEmail(threadId, approverEmail, existingThread.nextApprover);
+        return;
+      }
+
+      console.warn(`[EMAIL] No approval found matching thread ${threadId} and approver ${approverEmail}`);
+      await sendAlreadyDecidedEmail(threadId, approverEmail, "FINALIZED / NOT APPLICABLE");
+      return;
+    }
+
+    // 5. Validation check against nextApprover
+    console.log(`[EMAIL] Validation: ${normEmail} == ${approval.nextApprover}?`);
+    if (normEmail.toLowerCase() !== (approval.nextApprover || "").toLowerCase()) {
+      console.warn(`[EMAIL] Out of turn reply from ${approverEmail}`);
+      await sendNotYourTurnEmail(threadId, approverEmail, approval.nextApprover || "another approver");
+      return;
+    }
+
+    // 6. Execute decision
+    if (decision === "APPROVED") {
+      await handleApprovedDecision(approval, normEmail, threadId);
+    } else if (decision === "REJECTED") {
+      await handleRejectedDecision(approval, normEmail, threadId, reason);
+    }
+
+    // 7. Mark Processed
+    await prisma.processedMessage.upsert({
+      where: { gmailMessageId: parsed.gmailMessageId },
+      create: {
+        gmailMessageId: parsed.gmailMessageId,
+        messageIdHeader: parsed.messageIdHeader,
+        threadId: parsed.threadId,
+      },
+      update: {},
+    });
+    console.log(`[EMAIL] ProcessedMessage recorded for ${parsed.gmailMessageId}`);
+
+  } catch (error) {
+    console.error(`[EMAIL REPLY] Error processing approval reply:`, error);
+
+    await prisma.activityLog.create({
+      data: {
+        approvalId: "unknown",
+        actorEmail: approverEmail || "system",
+        action: "email.reply.error",
+        details: { error: error instanceof Error ? error.message : String(error) },
+      },
+    }).catch(() => {});
+
+    try {
+      await sendClarificationEmail(threadId, approverEmail);
+    } catch {}
+  }
 }
 
 export async function ingestParsedMessage(
@@ -156,7 +401,12 @@ export async function ingestParsedMessage(
 
     const pending = await tx.approval.update({
       where: { id: created.id },
-      data: { state: ApprovalState.PENDING_APPROVAL, lastActivityAt: new Date() },
+      data: {
+        state: ApprovalState.PENDING_APPROVAL,
+        nextApprover: parties.approvers[0] ? normalizeEmail(parties.approvers[0].email) : null,
+        gmailThreadId: parsed.threadId,
+        lastActivityAt: new Date(),
+      },
     });
 
     await tx.processedMessage.create({
@@ -181,6 +431,10 @@ export async function fetchAndIngestMessage(gmailMessageId: string) {
     format: "full",
   });
   const parsed = parseGmailMessage(res.data);
+  if (isEmailReply(parsed)) {
+    await handleApprovalReply(parsed);
+    return { kind: "updated" as const };
+  }
   return ingestParsedMessage(parsed);
 }
 

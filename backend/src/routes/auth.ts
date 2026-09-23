@@ -41,15 +41,21 @@ function projectedName(central: CentralEmployee, payload: SsoPayload): string {
 }
 
 function publicUser(user: {
-  employeeId: bigint;
+  employeeId: string;
   email: string;
-  name: string;
+  firstName?: string;
+  lastName?: string;
+  name?: string;
   role: UserRole;
 }) {
+  const name =
+    user.name ||
+    [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||
+    user.email.split("@")[0];
   return {
-    id: user.employeeId.toString(),
+    id: user.employeeId,
     email: user.email,
-    name: user.name,
+    name,
     role: user.role,
   };
 }
@@ -124,9 +130,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         return reply.unauthorized("Account is inactive");
       }
 
-      const empId = BigInt(central.emp_id);
+      const empId = String(central.emp_id || payload.emp_id || payload.central_emp_id || `EMP-${Date.now()}`);
       const projectedEmail = normalizeEmail(central.email);
-      const name = projectedName(central, payload);
+      const firstName = central.first_name || payload.first_name || email.split("@")[0];
+      const lastName = central.last_name || "";
+      const phone = central.phone || null;
+      const designation = central.designation || "";
+      const departmentId = central.department_id || null;
+      const managerId = central.manager_id || null;
+      const dob = central.dob ? new Date(central.dob) : null;
+      const bloodGroup = central.blood_group || null;
+      const permanentAddress = central.permanent_address || null;
+      const localAddress = central.local_address || null;
 
       // Upsert local projection. Preserve locally-managed `role` on re-login
       // (see decision_approvals_admin_manual — ADMIN is set by dev SQL, not
@@ -135,16 +150,34 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         where: { employeeId: empId },
         create: {
           employeeId: empId,
+          firstName,
+          lastName,
           email: projectedEmail,
-          name,
+          phone,
+          designation,
+          departmentId,
+          managerId,
+          dob,
+          bloodGroup,
+          permanentAddress,
+          localAddress,
           role: UserRole.USER,
           isActive: true,
           lastLoginAt: new Date(),
           tokenVersion: 1,
         },
         update: {
+          firstName,
+          lastName,
           email: projectedEmail,
-          name,
+          phone,
+          designation,
+          departmentId,
+          managerId,
+          dob,
+          bloodGroup,
+          permanentAddress,
+          localAddress,
           isActive: true,
           lastLoginAt: new Date(),
         },
@@ -158,7 +191,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         action: "auth.sso.login.success",
         details: {
           issuer: payload.iss || "login-auth",
-          empId: user.employeeId.toString(),
+          empId: user.employeeId,
         },
       });
 
@@ -166,13 +199,67 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  if (config.allowDevLogin) {
+    app.post(
+      "/auth/dev-login",
+      {
+        config: {
+          rateLimit: {
+            max: 30,
+            timeWindow: "1 minute",
+          },
+        },
+      },
+      async (request, reply) => {
+        const parsed = z
+          .object({ email: z.string().email() })
+          .safeParse(request.body);
+        if (!parsed.success) {
+          return reply.badRequest("Valid email address is required");
+        }
+
+        const email = normalizeEmail(parsed.data.email);
+        let user = await prisma.employee.findFirst({ where: { email } });
+
+        if (!user) {
+          // Create local test user with a generated text employeeId (e.g. EMP-101)
+          const empId = `EMP-${Math.floor(100 + Math.random() * 900)}`;
+          user = await prisma.employee.create({
+            data: {
+              employeeId: empId,
+              email,
+              firstName: email.split("@")[0] || "Test",
+              lastName: "User",
+              designation: "Developer",
+              role: email.includes("admin") ? UserRole.ADMIN : UserRole.USER,
+              isActive: true,
+              tokenVersion: 1,
+              lastLoginAt: new Date(),
+            },
+          });
+        }
+
+        const sessionToken = signSessionToken(app, user);
+        setAuthCookie(reply, sessionToken, SESSION_MAX_AGE_SECONDS);
+
+        await logActivity({
+          actorEmail: user.email,
+          action: "auth.dev_login.success",
+          details: { empId: user.employeeId },
+        });
+
+        return { user: publicUser(user) };
+      }
+    );
+  }
+
   app.post("/auth/logout", async (request, reply) => {
     const token = request.cookies?.["approvals_token"];
     clearAuthCookie(reply);
     try {
       if (token) {
         const payload = app.jwt.verify<{ sub: string; email: string }>(token);
-        const employeeId = BigInt(payload.sub);
+        const employeeId = payload.sub;
         await prisma.employee.update({
           where: { employeeId },
           data: { tokenVersion: { increment: 1 } },

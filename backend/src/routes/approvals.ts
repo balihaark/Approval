@@ -5,7 +5,11 @@ import { prisma } from "../lib/prisma.js";
 import { authenticate } from "../plugins/auth.js";
 import { userCanAccessApproval, normalizeEmail } from "../lib/access.js";
 import { gmailConfigured, config } from "../config.js";
-import { sendThreadReply, sendNewApprovalEmail } from "../lib/gmail/reply.js";
+import { sendThreadReply, sendNewApprovalEmail, getApprovalChain } from "../lib/gmail/reply.js";
+
+const isValidBlauplugEmail = (email: string): boolean => {
+  return email.trim().toLowerCase().endsWith("@blauplug.com");
+};
 
 const createSchema = z.object({
   subject: z.string().min(1).max(500),
@@ -27,6 +31,7 @@ const STATE_LABEL: Record<ApprovalState, string> = {
   PENDING_APPROVAL: "Pending Approval",
   APPROVED: "Approved",
   REJECTED: "Rejected",
+  REVOKED: "Revoked",
 };
 
 const listQuery = z.object({
@@ -69,6 +74,12 @@ function serializeApproval(
     return 0;
   });
 
+  const approvedBy = approval.decisions
+    .filter((d) => d.decision === "APPROVED")
+    .sort((a, b) => new Date(a.decidedAt).getTime() - new Date(b.decidedAt).getTime())
+    .map((d) => d.decidedBy)
+    .join(", ");
+
   return {
     id: approval.id,
     subject: approval.subject,
@@ -78,6 +89,10 @@ function serializeApproval(
     project: approval.project,
     state: approval.state,
     stateLabel: STATE_LABEL[approval.state],
+    approvedBy: approvedBy || undefined,
+    revokedAt: approval.revokedAt,
+    revokedBy: approval.revokedBy,
+    revokeReason: approval.revokeReason,
     threadId: approval.threadId,
     createdAt: approval.createdAt,
     lastActivityAt: approval.lastActivityAt,
@@ -143,6 +158,12 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
           !approvers.includes(e)
       );
 
+      for (const email of [...parsed.data.approvers, ...(parsed.data.participants ?? [])]) {
+        if (!isValidBlauplugEmail(email)) {
+          return reply.badRequest("Party email must be @blauplug.com domain");
+        }
+      }
+
       if (!approvers.length) {
         return reply.badRequest(
           "Add at least one approver email different from yourself and the monitoring inbox"
@@ -189,7 +210,9 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
             department: dept,
             project,
             state: ApprovalState.PENDING_APPROVAL,
+            nextApprover: approvers[0] ? normalizeEmail(approvers[0]) : null,
             threadId: sent.threadId,
+            gmailThreadId: sent.threadId,
             messageId: sent.messageIdHeader,
             gmailMessageId: sent.gmailMessageId,
             parties: {
@@ -224,6 +247,15 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
             threadId: sent.threadId,
           },
           update: {},
+        });
+
+        await tx.activityLog.create({
+          data: {
+            approvalId: created.id,
+            actorEmail: user.email,
+            action: "approval.created.in_app",
+            details: { subject: created.subject },
+          },
         });
 
         return created;
@@ -493,6 +525,11 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
           ? ApprovalState.APPROVED
           : ApprovalState.PENDING_APPROVAL;
 
+      const nextApproverEmail =
+        outcome === "REJECTED" || isLastApprover
+          ? null
+          : normalizeEmail(approvers[turnIndex + 1].email);
+
       const updated = await prisma.$transaction(async (tx) => {
         await tx.decision.create({
           data: {
@@ -507,7 +544,11 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
         });
         const row = await tx.approval.update({
           where: { id },
-          data: { state: nextState, lastActivityAt: new Date() },
+          data: {
+            state: nextState,
+            nextApprover: nextApproverEmail,
+            lastActivityAt: new Date(),
+          },
           include: { parties: true, decisions: { orderBy: { decidedAt: "asc" } } },
         });
         return row;
@@ -531,9 +572,10 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
             outcome === "REJECTED"
               ? `\n\nReason: ${body.data.reason!.trim()}`
               : "";
+          const approvalChain = await getApprovalChain(updated.id);
           const bodyText =
             outcome === "APPROVED"
-              ? `This approval request has been APPROVED by ${user.name} <${user.email}>.\n\nSubject: ${approval.subject}\n\nThis decision was recorded in the Approvals App. Please do not reply to this message to change the decision.`
+              ? `This approval request has been APPROVED.\n\nApproved by: ${approvalChain}\n\nSubject: ${approval.subject}\n\nThis decision was recorded in the Approvals App. Please do not reply to this message to change the decision.`
               : `This approval request has been REJECTED by ${user.name} <${user.email}>.${reasonLine}\n\nSubject: ${approval.subject}\n\nThis decision was recorded in the Approvals App. Please do not reply to this message to change the decision.`;
 
           await sendThreadReply({
@@ -547,6 +589,190 @@ export async function approvalRoutes(app: FastifyInstance): Promise<void> {
           });
         } catch (err) {
           emailError = err instanceof Error ? err.message : "Failed to send email";
+        }
+      }
+
+      return {
+        approval: serializeApproval(updated),
+        emailError,
+      };
+    }
+  );
+
+  app.post(
+    "/approvals/:id/revoke",
+    { preHandler: authenticate },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const body = z.object({ reason: z.string().min(1, "Reason is required") }).safeParse(request.body);
+      if (!body.success) {
+        return reply.badRequest("A valid revocation reason is required");
+      }
+
+      const approval = await prisma.approval.findUnique({
+        where: { id },
+        include: { parties: true, decisions: true },
+      });
+
+      if (!approval) {
+        return reply.notFound("Approval not found");
+      }
+
+      const user = request.currentUser;
+      const canAccess = await userCanAccessApproval(user, id);
+      if (!canAccess) {
+        return reply.forbidden("You do not have permission to access this approval");
+      }
+
+      if (approval.state !== ApprovalState.APPROVED && approval.state !== ApprovalState.PENDING_APPROVAL) {
+        return reply.badRequest("Only pending or approved requests can be revoked");
+      }
+
+      const requester = approval.parties.find((p) => p.role === "REQUESTER");
+      const isRequester = requester && requester.email.toLowerCase() === user.email.toLowerCase();
+      const isAdmin = user.role === "ADMIN";
+
+      if (!isRequester && !isAdmin) {
+        return reply.forbidden("Only the requester or an admin can revoke an approval");
+      }
+
+      const reasonStr = body.data.reason.trim();
+      const updated = await prisma.$transaction(async (tx) => {
+        const row = await tx.approval.update({
+          where: { id },
+          data: {
+            state: ApprovalState.REVOKED,
+            revokedAt: new Date(),
+            revokedBy: user.email,
+            revokeReason: reasonStr,
+            lastActivityAt: new Date(),
+          },
+          include: { parties: true, decisions: { orderBy: { decidedAt: "asc" } } },
+        });
+
+        await tx.activityLog.create({
+          data: {
+            approvalId: id,
+            actorEmail: user.email,
+            action: "approval.revoked",
+            details: { reason: reasonStr },
+          },
+        });
+
+        return row;
+      });
+
+      let emailError: string | null = null;
+      if (gmailConfigured() && !approval.threadId.startsWith("local-")) {
+        try {
+          const allParties = approval.parties.map((p) => p.email);
+          const toEmails: string[] = requester ? [requester.email] : allParties.slice(0, 1);
+          const ccEmails: string[] = allParties.filter((e) => e !== (requester?.email ?? ""));
+          const bodyText = `This approval request has been REVOKED by ${user.name} <${user.email}>.\n\nReason: ${reasonStr}\n\nSubject: ${approval.subject}\n\nThis decision was updated in the Approvals App.`;
+          await sendThreadReply({
+            threadId: approval.threadId,
+            inReplyTo: approval.messageId,
+            references: approval.messageId,
+            to: toEmails,
+            cc: ccEmails,
+            subject: approval.subject,
+            body: bodyText,
+          });
+        } catch (err) {
+          emailError = err instanceof Error ? err.message : "Failed to send revocation email";
+        }
+      }
+
+      return {
+        approval: serializeApproval(updated),
+        emailError,
+      };
+    }
+  );
+
+  app.post(
+    "/approvals/:id/resubmit-after-revoke",
+    { preHandler: authenticate },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+
+      const approval = await prisma.approval.findUnique({
+        where: { id },
+        include: { parties: true, decisions: true },
+      });
+
+      if (!approval) {
+        return reply.notFound("Approval not found");
+      }
+
+      const user = request.currentUser;
+      const canAccess = await userCanAccessApproval(user, id);
+      if (!canAccess) {
+        return reply.forbidden("You do not have permission to access this approval");
+      }
+
+      if (approval.state !== ApprovalState.REVOKED) {
+        return reply.badRequest("Only revoked requests can be resubmitted");
+      }
+
+      const requester = approval.parties.find((p) => p.role === "REQUESTER");
+      const isRequester = requester && requester.email.toLowerCase() === user.email.toLowerCase();
+
+      if (!isRequester) {
+        return reply.forbidden("Only the original requester can resubmit a revoked approval");
+      }
+
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.decision.deleteMany({
+          where: { approvalId: id },
+        });
+
+        const row = await tx.approval.update({
+          where: { id },
+          data: {
+            state: ApprovalState.PENDING_APPROVAL,
+            revokedAt: null,
+            revokedBy: null,
+            revokeReason: null,
+            lastActivityAt: new Date(),
+          },
+          include: { parties: true, decisions: { orderBy: { decidedAt: "asc" } } },
+        });
+
+        await tx.activityLog.create({
+          data: {
+            approvalId: id,
+            actorEmail: user.email,
+            action: "approval.resubmitted_after_revoke",
+            details: {},
+          },
+        });
+
+        return row;
+      });
+
+      let emailError: string | null = null;
+      if (gmailConfigured() && !approval.threadId.startsWith("local-")) {
+        try {
+          const approvers = approval.parties
+            .filter((p) => p.role === "APPROVER")
+            .sort((a, b) => (a.sequenceOrder ?? 0) - (b.sequenceOrder ?? 0));
+          const firstApprover = approvers[0];
+          const allParties = approval.parties.map((p) => p.email);
+          const toEmails: string[] = firstApprover ? [firstApprover.email] : allParties.slice(0, 1);
+          const bodyText = `This approval request has been RESUBMITTED for approval by ${user.name} <${user.email}>.\n\nSubject: ${approval.subject}\n\nPlease review and submit your decision in the Approvals App.`;
+
+          await sendThreadReply({
+            threadId: approval.threadId,
+            inReplyTo: approval.messageId,
+            references: approval.messageId,
+            to: toEmails,
+            cc: allParties,
+            subject: approval.subject,
+            body: bodyText,
+          });
+        } catch (err) {
+          emailError = err instanceof Error ? err.message : "Failed to send resubmission email";
         }
       }
 

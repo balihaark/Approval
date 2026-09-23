@@ -45,11 +45,28 @@ export default function NewRequestPage() {
         setBusy(false);
         return;
       }
+
+      const isValidBlauplugEmail = (email: string) => email.trim().toLowerCase().endsWith("@blauplug.com");
+      const invalidApprover = to.find((e) => !isValidBlauplugEmail(e));
+      if (invalidApprover) {
+        setError(`Must be @blauplug.com email (${invalidApprover})`);
+        setBusy(false);
+        return;
+      }
+
+      const cc = splitEmails(participants);
+      const invalidParticipant = cc.find((e) => !isValidBlauplugEmail(e));
+      if (invalidParticipant) {
+        setError(`Must be @blauplug.com email (${invalidParticipant})`);
+        setBusy(false);
+        return;
+      }
+
       const res = await createApproval({
         subject: subject.trim(),
         body: body.trim(),
         approvers: to,
-        participants: splitEmails(participants),
+        participants: cc,
         department: department.trim() || null,
         project: project.trim() || null,
       });
@@ -65,7 +82,6 @@ export default function NewRequestPage() {
   return (
     <AppShell
       title="New request"
-      subtitle="Creates the approval record and emails the approver(s) from the monitoring inbox."
     >
       <div className="ui-page-narrow">
         <form onSubmit={onSubmit} className="space-y-4">
@@ -83,7 +99,6 @@ export default function NewRequestPage() {
               <Field
                 label="Request details"
                 required
-                hint="Approvers see this text in the app and in the email."
               >
                 <Textarea
                   value={body}
@@ -101,23 +116,21 @@ export default function NewRequestPage() {
               <Field
                 label="Approvers (To)"
                 required
-                hint="Comma-separated. Must differ from you and the monitoring inbox."
               >
                 <Input
                   value={approvers}
                   onChange={(e) => setApprovers(e.target.value)}
-                  placeholder="manager@company.com"
+                  placeholder="manager@blauplug.com"
                   required
                 />
               </Field>
               <Field
                 label="CC / participants"
-                hint="Optional. They can follow the thread but cannot decide."
               >
                 <Input
                   value={participants}
                   onChange={(e) => setParticipants(e.target.value)}
-                  placeholder="teammate@company.com"
+                  placeholder="teammate@blauplug.com"
                 />
               </Field>
             </div>

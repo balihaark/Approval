@@ -6,7 +6,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { StateBadge } from "@/components/StateBadge";
 import { useAuth } from "@/components/AuthProvider";
-import { decide, getActivity, getApproval, updateApproval } from "@/lib/api";
+import { decide, getActivity, getApproval, updateApproval, revokeApproval, resubmitApprovalAfterRevoke } from "@/lib/api";
 import type { ActivityItem, Approval } from "@/lib/types";
 import {
   Alert,
@@ -22,7 +22,7 @@ import {
   useToast,
   type BadgeTone,
 } from "@/components/ui";
-import { ArrowLeft, Check, X } from "lucide-react";
+import { ArrowLeft, Check, RotateCcw, ShieldOff, X } from "lucide-react";
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleString(undefined, {
@@ -37,6 +37,8 @@ const ACTION_LABEL: Record<string, string> = {
   "approval.pending": "Waiting for approval",
   "approval.approved": "Approved",
   "approval.rejected": "Rejected",
+  "approval.revoked": "Approval revoked",
+  "approval.resubmitted_after_revoke": "Resubmitted for approval",
   "approval.metadata.updated": "Details updated",
   "email.decision.sent": "Reply sent to requester",
   "email.decision.failed": "Reply email failed to send",
@@ -67,6 +69,8 @@ export default function ApprovalDetailPage() {
   const [busy, setBusy] = useState(false);
   const [dept, setDept] = useState("");
   const [project, setProject] = useState("");
+  const [showRevokeModal, setShowRevokeModal] = useState(false);
+  const [revokeReason, setRevokeReason] = useState("");
 
   const reload = useCallback(async () => {
     const [a, logs] = await Promise.all([
@@ -103,6 +107,16 @@ export default function ApprovalDetailPage() {
 
   const isAdmin = user?.role === "ADMIN";
 
+  const isRequester =
+    approval?.requester &&
+    user &&
+    approval.requester.email.toLowerCase() === user.email.toLowerCase();
+
+  const canRevoke =
+    approval &&
+    (approval.state === "APPROVED" || approval.state === "PENDING_APPROVAL") &&
+    (isRequester || isAdmin);
+
   const canDecideNow =
     approval &&
     approval.state === "PENDING_APPROVAL" &&
@@ -114,6 +128,54 @@ export default function ApprovalDetailPage() {
     isUserAnApprover &&
     !isCurrentTurnUser &&
     !isAdmin;
+
+  async function handleRevoke() {
+    if (!approval) return;
+    if (!revokeReason.trim()) {
+      setFormError("A reason is required to revoke an approval.");
+      return;
+    }
+    setBusy(true);
+    setFormError(null);
+    try {
+      const res = await revokeApproval(approval.id, { reason: revokeReason.trim() });
+      setApproval(res.approval);
+      setShowRevokeModal(false);
+      setRevokeReason("");
+      if (res.emailError) {
+        toast(`Revoked, but email notification failed: ${res.emailError}`, "error");
+      } else {
+        toast("Approval revoked successfully.", "success");
+      }
+      const logs = await getActivity(approval.id);
+      setActivity(logs.items);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Revoke failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResubmit() {
+    if (!approval) return;
+    setBusy(true);
+    setFormError(null);
+    try {
+      const res = await resubmitApprovalAfterRevoke(approval.id);
+      setApproval(res.approval);
+      if (res.emailError) {
+        toast(`Resubmitted, but email failed: ${res.emailError}`, "error");
+      } else {
+        toast("Request resubmitted for approval.", "success");
+      }
+      const logs = await getActivity(approval.id);
+      setActivity(logs.items);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Resubmit failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onDecide(decision: "approved" | "rejected") {
     if (!approval) return;
@@ -177,7 +239,18 @@ export default function ApprovalDetailPage() {
       }
       actions={
         approval ? (
-          <StateBadge state={approval.state} label={approval.stateLabel} />
+          <div className="flex items-center gap-2">
+            {canRevoke && (
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => setShowRevokeModal(true)}
+              >
+                <ShieldOff size={14} aria-hidden /> Revoke Approval
+              </Button>
+            )}
+            <StateBadge state={approval.state} label={approval.stateLabel} />
+          </div>
         ) : undefined
       }
     >
@@ -295,7 +368,7 @@ export default function ApprovalDetailPage() {
                   </p>
                   <Field
                     label="Reason"
-                    hint={isAdmin && !isCurrentTurnUser ? "Required for admin override." : "Required when rejecting; optional when approving."}
+                    hint={isAdmin && !isCurrentTurnUser ? "Required for admin override." : undefined}
                   >
                     <Textarea
                       value={reason}
@@ -338,6 +411,16 @@ export default function ApprovalDetailPage() {
                 </Panel>
               )}
 
+              {approval.state === "APPROVED" && (
+                <Panel title="Approval Status">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-3.5 text-emerald-900">
+                    <p className="text-sm font-semibold flex items-center gap-1.5 text-emerald-800">
+                      <Check size={16} aria-hidden /> Approved by: {approval.approvedBy || approval.decisions.filter((d) => d.decision === "APPROVED").map((d) => d.decidedBy).join(", ")}
+                    </p>
+                  </div>
+                </Panel>
+              )}
+
               {approval.decisions.length > 0 && (
                 <Panel title="Decisions">
                   <ol className="divide-y divide-line">
@@ -364,6 +447,38 @@ export default function ApprovalDetailPage() {
                       </li>
                     ))}
                   </ol>
+                </Panel>
+              )}
+
+              {approval.state === "REVOKED" && (
+                <Panel title="Revocation Details">
+                  <div className="rounded-lg border border-red-200 bg-red-50/70 p-3.5 text-red-900">
+                    <div className="flex items-center gap-1.5 text-sm font-semibold text-red-800">
+                      <ShieldOff size={16} aria-hidden /> ✗ This approval was revoked
+                    </div>
+                    {approval.revokeReason && (
+                      <p className="mt-2 text-xs text-slate-700">
+                        <span className="font-semibold text-slate-900">Reason:</span> {approval.revokeReason}
+                      </p>
+                    )}
+                    {approval.revokedBy && (
+                      <p className="mt-1 text-xs text-slate-500">
+                        Revoked by: {approval.revokedBy}
+                      </p>
+                    )}
+                    {isRequester && (
+                      <div className="mt-3 border-t border-red-200/60 pt-3">
+                        <Button
+                          variant="primary"
+                          className="w-full"
+                          loading={busy}
+                          onClick={() => void handleResubmit()}
+                        >
+                          <RotateCcw size={15} aria-hidden /> Resubmit for Approval
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </Panel>
               )}
 
@@ -417,6 +532,46 @@ export default function ApprovalDetailPage() {
                   })}
                 </ul>
               </Panel>
+            </div>
+          </div>
+        )}
+
+        {showRevokeModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+            <div className="w-full max-w-md rounded-lg border border-line bg-surface p-6 shadow-modal">
+              <h2 className="text-lg font-semibold text-slate-900">Revoke Approval</h2>
+              <p className="mt-1.5 rounded border border-amber-200 bg-amber-50 p-2 text-xs font-medium text-amber-800">
+                Are you sure? All approvers will be notified.
+              </p>
+              <div className="mt-4">
+                <Field label="Revocation Reason" hint="Required" required>
+                  <Textarea
+                    value={revokeReason}
+                    onChange={(e) => setRevokeReason(e.target.value)}
+                    placeholder="Explain why this approval is being revoked…"
+                    rows={3}
+                  />
+                </Field>
+              </div>
+              <div className="mt-6 flex justify-end gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => {
+                    setShowRevokeModal(false);
+                    setRevokeReason("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger"
+                  loading={busy}
+                  onClick={() => void handleRevoke()}
+                >
+                  Confirm Revoke
+                </Button>
+              </div>
             </div>
           </div>
         )}

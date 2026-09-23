@@ -8,7 +8,7 @@ import {
 } from "../services/centralDb.service.js";
 
 export type AuthUser = {
-  id: bigint;
+  id: string;
   email: string;
   name: string;
   role: UserRole;
@@ -55,10 +55,8 @@ export async function authenticate(
       role: UserRole;
       tv?: number;
     }>(token);
-    let employeeId: bigint;
-    try {
-      employeeId = BigInt(payload.sub);
-    } catch {
+    const employeeId = payload.sub;
+    if (!employeeId) {
       return reply.unauthorized("Invalid or expired session");
     }
     const user = await prisma.employee.findUnique({ where: { employeeId } });
@@ -97,10 +95,12 @@ export async function authenticate(
       throw err;
     }
 
+    const name = `${user.firstName} ${user.lastName}`.trim() || user.email.split("@")[0];
+
     request.currentUser = {
       id: user.employeeId,
       email: user.email,
-      name: user.name,
+      name,
       role: user.role,
     };
   } catch {
@@ -159,7 +159,7 @@ export function takeOAuthStateCookie(
 export function signSessionToken(
   app: FastifyInstance,
   user: {
-    employeeId: bigint;
+    employeeId: string;
     email: string;
     role: UserRole;
     tokenVersion: number;
@@ -167,7 +167,7 @@ export function signSessionToken(
 ): string {
   return app.jwt.sign(
     {
-      sub: user.employeeId.toString(),
+      sub: user.employeeId,
       email: user.email,
       role: user.role,
       tv: user.tokenVersion,

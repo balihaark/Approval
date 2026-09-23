@@ -10,7 +10,6 @@ export default function ReceivedPage() {
   return (
     <AppShell
       title="Received"
-      subtitle="Approvals waiting on you — or that you already decided."
       actions={
         <Link href="/new">
           <Button size="md">

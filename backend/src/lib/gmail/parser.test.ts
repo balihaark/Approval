@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { stripSignature, parseGmailMessage } from "./parser.js";
+import { stripSignature, parseGmailMessage, isEmailReply, extractDecisionFromReply } from "./parser.js";
 
 test("1. Plain body with no signature passes through unchanged", () => {
   const input = "Hi Team,\n\nPlease review the attached document.\n\nThanks in advance.";
@@ -99,3 +99,56 @@ _________________
   const parsed = parseGmailMessage(rawMessage);
   assert.equal(parsed.bodyText, "Kindly review and approve the server migration request.");
 });
+
+test("7. isEmailReply identifies replies by header or subject prefix", () => {
+  const replyMsg1 = parseGmailMessage({
+    id: "m1",
+    threadId: "t1",
+    payload: { headers: [{ name: "In-Reply-To", value: "<hdr1@mail>" }] },
+  });
+  assert.equal(isEmailReply(replyMsg1), true);
+
+  const replyMsg2 = parseGmailMessage({
+    id: "m2",
+    threadId: "t1",
+    payload: { headers: [{ name: "Subject", value: "Re: Purchase Order #123" }] },
+  });
+  assert.equal(isEmailReply(replyMsg2), true);
+
+  const newMsg = parseGmailMessage({
+    id: "m3",
+    threadId: "t3",
+    payload: { headers: [{ name: "Subject", value: "New Purchase Request" }] },
+  });
+  assert.equal(isEmailReply(newMsg), false);
+});
+
+test("8. extractDecisionFromReply parses approval and rejection with reasons, stripping signatures and quoted history", () => {
+  const bodyApproved = `Approved: Looks good to proceed with Q4 budget.
+
+> On Sep 20, Requester wrote:
+> Please approve budget allocation.
+-- 
+John Approver | VP Finance`;
+
+  const decisionApp = extractDecisionFromReply(bodyApproved);
+  assert.equal(decisionApp.decision, "APPROVED");
+  assert.equal(decisionApp.reason, "Looks good to proceed with Q4 budget.");
+  assert.equal(decisionApp.confidence, 0.9);
+
+  const bodyRejected = `Rejected: Amount exceeds pre-approved policy limit.
+
+> On Sep 20, Requester wrote:
+> Expense details attached.`;
+
+  const decisionRej = extractDecisionFromReply(bodyRejected);
+  assert.equal(decisionRej.decision, "REJECTED");
+  assert.equal(decisionRej.reason, "Amount exceeds pre-approved policy limit.");
+  assert.equal(decisionRej.confidence, 0.9);
+
+  const bodyUnclear = "I will check the figures and get back to you by Monday.";
+  const decisionUnclear = extractDecisionFromReply(bodyUnclear);
+  assert.equal(decisionUnclear.decision, null);
+  assert.equal(decisionUnclear.confidence, 0);
+});
+

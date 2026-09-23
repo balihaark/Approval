@@ -1,3 +1,10 @@
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load root .env and backend .env
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+dotenv.config({ path: path.resolve(process.cwd(), 'backend/.env') });
+
 import "dotenv/config";
 import http from "node:http";
 import { URL } from "node:url";

@@ -27,8 +27,12 @@ export type Approval = {
   summary: string | null;
   department: string | null;
   project: string | null;
-  state: "REGISTERED" | "PENDING_APPROVAL" | "APPROVED" | "REJECTED";
+  state: "REGISTERED" | "PENDING_APPROVAL" | "APPROVED" | "REJECTED" | "REVOKED";
   stateLabel: string;
+  approvedBy?: string;
+  revokedAt?: string | null;
+  revokedBy?: string | null;
+  revokeReason?: string | null;
   threadId: string;
   createdAt: string;
   lastActivityAt: string;

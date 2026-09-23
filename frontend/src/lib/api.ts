@@ -71,6 +71,13 @@ export function ssoCallback(token: string) {
   });
 }
 
+export function devLogin(email: string) {
+  return api<{ user: User }>("/auth/dev-login", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
 export function logout() {
   return api<{ ok: boolean }>("/auth/logout", { method: "POST" });
 }
@@ -134,6 +141,25 @@ export function decide(
     {
       method: "POST",
       body: JSON.stringify({ decision, reason }),
+    }
+  );
+}
+
+export function revokeApproval(id: string, data: { reason: string }) {
+  return api<{ approval: Approval; emailError?: string | null }>(
+    `/approvals/${id}/revoke`,
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    }
+  );
+}
+
+export function resubmitApprovalAfterRevoke(id: string) {
+  return api<{ approval: Approval; emailError?: string | null }>(
+    `/approvals/${id}/resubmit-after-revoke`,
+    {
+      method: "POST",
     }
   );
 }

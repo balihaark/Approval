@@ -5,7 +5,7 @@ This repository has two independent databases. Keep them separate.
 | Service | Database | Schema source |
 | --- | --- | --- |
 | Approvals | `approvals` | `../backend/prisma/schema.prisma` and `../backend/prisma/migrations/` |
-| Login-Auth (separate manager-owned repository) | `login_auth` | its `backend/migrations/init_login_auth_db.sql` |
+| Login-Auth | `login_auth` | its `backend/migrations/init_login_auth_db.sql` |
 
 ## Approvals
 

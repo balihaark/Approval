@@ -53,7 +53,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function logout() {
     await apiLogout().catch(() => undefined);
     setUser(null);
-    window.location.assign("/login");
+    if (typeof window !== "undefined") {
+      localStorage.clear();
+      sessionStorage.clear();
+    }
+    window.location.assign("/login?force=true");
   }
 
   return (

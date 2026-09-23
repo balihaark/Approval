@@ -364,3 +364,67 @@ export function summarizeBody(body: string): string {
   if (compact.length <= 280) return compact;
   return `${compact.slice(0, 277)}...`;
 }
+
+export function isEmailReply(message: ParsedMessage): boolean {
+  if (message.inReplyTo || message.references) {
+    return true;
+  }
+  if (/^re\s*:/i.test(message.subject.trim())) {
+    return true;
+  }
+  return false;
+}
+
+export function extractDecisionFromReply(emailBody: string): {
+  decision: "APPROVED" | "REJECTED" | null;
+  confidence: number;
+  reason: string | null;
+} {
+  if (!emailBody) {
+    return { decision: null, confidence: 0, reason: null };
+  }
+
+  // Remove signature (look for "-- " or common signature patterns)
+  let cleaned = emailBody.split('--')[0]; // Gmail signature separator
+
+  // Remove quoted text (lines starting with ">")
+  cleaned = cleaned
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('>'))
+    .join('\n');
+
+  // Get first 5 lines only
+  const lines = cleaned.split('\n').map((l) => l.trim()).filter(Boolean);
+  const firstParagraph = lines.slice(0, 5).join(' ');
+
+  if (!firstParagraph) {
+    return { decision: null, confidence: 0, reason: null };
+  }
+
+  // Look for "approved: reason" and "rejected: reason" patterns
+  const approvedMatch = firstParagraph.match(/(?<![a-zA-Z-])\bapproved\b\s*:?\s*(.*)/i);
+  const rejectedMatch = firstParagraph.match(/(?<![a-zA-Z-])\brejected\b\s*:?\s*(.*)/i);
+
+  const approvedIdx = approvedMatch && approvedMatch.index !== undefined ? approvedMatch.index : Infinity;
+  const rejectedIdx = rejectedMatch && rejectedMatch.index !== undefined ? rejectedMatch.index : Infinity;
+
+  if (approvedIdx < rejectedIdx && approvedIdx !== Infinity) {
+    const reason = approvedMatch![1].trim().substring(0, 200);
+    return { decision: "APPROVED", confidence: 0.9, reason: reason || null };
+  } else if (rejectedIdx < approvedIdx && rejectedIdx !== Infinity) {
+    const reason = rejectedMatch![1].trim().substring(0, 200);
+    return { decision: "REJECTED", confidence: 0.9, reason: reason || null };
+  }
+
+  // Fallback checks for keywords if no explicit pattern match
+  if (/(?<![a-zA-Z-])\b(approved|approve|ok|looks good|lgtm|accepted|yes|✓)\b/i.test(firstParagraph)) {
+    return { decision: "APPROVED", confidence: 0.9, reason: firstParagraph.substring(0, 200) };
+  }
+
+  if (/(?<![a-zA-Z-])\b(rejected|reject|denied|deny|no|✗|disapproved|declined)\b/i.test(firstParagraph)) {
+    return { decision: "REJECTED", confidence: 0.9, reason: firstParagraph.substring(0, 200) };
+  }
+
+  return { decision: null, confidence: 0, reason: firstParagraph.substring(0, 200) };
+}
+

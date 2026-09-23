@@ -89,6 +89,10 @@ export const config = {
   approvalsApiKey: optional("APPROVALS_API_KEY"),
   /** Allow admin email simulation only outside production */
   allowSimulateEmail: !isProd && optional("ALLOW_SIMULATE_EMAIL", "true") === "true",
+  /** Allow direct test email login without SSO in dev mode */
+  allowDevLogin: !isProd && optional("ALLOW_DEV_LOGIN", "true") === "true",
+  /** Fallback to mock central db when central_db is unreachable in dev mode */
+  mockCentralDb: !isProd && optional("MOCK_CENTRAL_DB", "true") === "true",
   gmail: {
     clientId: optional("GOOGLE_CLIENT_ID"),
     clientSecret: optional("GOOGLE_CLIENT_SECRET"),

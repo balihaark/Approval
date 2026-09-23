@@ -173,7 +173,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       select: {
         employeeId: true,
         email: true,
-        name: true,
+        firstName: true,
+        lastName: true,
         role: true,
         isActive: true,
         lastLoginAt: true,
@@ -181,9 +182,14 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       },
     });
     return {
-      items: users.map(({ employeeId, ...user }) => ({
-        id: employeeId.toString(),
-        ...user,
+      items: users.map((user) => ({
+        id: user.employeeId,
+        email: user.email,
+        name: [user.firstName, user.lastName].filter(Boolean).join(" ").trim() || user.email.split("@")[0],
+        role: user.role,
+        isActive: user.isActive,
+        lastLoginAt: user.lastLoginAt,
+        createdAt: user.createdAt,
       })),
     };
   });

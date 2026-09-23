@@ -17,6 +17,7 @@ enum ApprovalState {
   PENDING_APPROVAL
   APPROVED
   REJECTED
+  REVOKED
 }
 
 enum PartyRole {
@@ -30,22 +31,38 @@ enum DecisionOutcome {
   REJECTED
 }
 
-// Local projection of central_db's employee identity. SSO is the only path
+// Local projection of central_db's employees identity. SSO is the only path
 // that populates this table — see routes/auth.ts. `employeeId` is central's
-// BIGINT emp_id. `role` (USER/ADMIN) is a local-only distinction, set by a
+// TEXT emp_id (e.g. EMP-001). `role` (USER/ADMIN) is a local-only distinction, set by a
 // dev running SQL directly on the approvals DB (see
-// decision_approvals_admin_manual memory) — nothing in the SSO payload or
-// central directory writes it.
+// decision_approvals_admin_manual memory).
 model Employee {
-  employeeId   BigInt    @id
-  email        String    @unique
-  name         String
-  role         UserRole  @default(USER)
-  isActive     Boolean   @default(true)
-  tokenVersion Int       @default(0)
-  lastLoginAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  srNo             Int       @default(autoincrement()) @map("sr_no")
+  employeeId       String    @id @map("emp_id")
+  firstName        String    @map("first_name")
+  lastName         String    @map("last_name")
+  email            String    @unique
+  phone            String?
+  designation      String    @default("")
+  departmentId     String?   @map("department_id")
+  managerId        String?   @map("manager_id")
+
+  // personal
+  dob              DateTime? @db.Date
+  bloodGroup       String?   @map("blood_group")
+
+  // addresses
+  permanentAddress String?   @map("permanent_address")
+  localAddress     String?   @map("local_address")
+
+  role             UserRole  @default(USER)
+  isActive         Boolean   @default(true)
+  tokenVersion     Int       @default(0)
+  lastLoginAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@map("employees")
 }
 
 model Approval {
@@ -56,7 +73,12 @@ model Approval {
   department     String?
   project        String?
   state          ApprovalState  @default(REGISTERED)
+  nextApprover   String?        @map("next_approver")
+  revokedAt      DateTime?
+  revokedBy      String?
+  revokeReason   String?
   threadId       String         @unique
+  gmailThreadId  String?        @map("gmail_thread_id")
   messageId      String?
   gmailMessageId String?
   lastActivityAt DateTime       @default(now())
@@ -66,6 +88,8 @@ model Approval {
   decisions      Decision[]
   activityLogs   ActivityLog[]
 
+  @@index([gmailThreadId])
+  @@index([nextApprover])
   @@index([state])
   @@index([department])
   @@index([project])

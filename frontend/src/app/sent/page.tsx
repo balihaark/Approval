@@ -10,7 +10,6 @@ export default function SentPage() {
   return (
     <AppShell
       title="Sent"
-      subtitle="Approval requests you raised."
       actions={
         <Link href="/new">
           <Button size="md">

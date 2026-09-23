@@ -6,6 +6,7 @@ const TONE: Record<Approval["state"], BadgeTone> = {
   PENDING_APPROVAL: "warning",
   APPROVED: "success",
   REJECTED: "danger",
+  REVOKED: "danger",
 };
 
 export function StateBadge({

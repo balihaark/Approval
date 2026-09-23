@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseGmailMessage, partiesFromParsed } from "../lib/gmail/parser.js";
-import { ingestParsedMessage } from "../lib/gmail/ingestion.js";
+import { ingestParsedMessage, handleApprovalReply } from "../lib/gmail/ingestion.js";
 import { prisma } from "../lib/prisma.js";
 import { PartyRole, ApprovalState } from "@prisma/client";
 
@@ -12,7 +12,7 @@ test("1. Gmail ingestion assigns sequence orders 0, 1, 2 for To recipients A, B,
     payload: {
       headers: [
         { name: "Subject", value: "Sequential Test Request" },
-        { name: "From", value: "Requester <requester@corp.com>" },
+        { name: "From", value: "Requester <requester@blauplug.com>" },
         {
           name: "To",
           value:
@@ -195,3 +195,95 @@ test("3. Full sequence approval: A -> B -> C only becomes APPROVED after C", asy
 
   await prisma.approval.delete({ where: { id: approval.id } });
 });
+
+test("4. Email reply handling updates approval state and nextApprover sequentially", async () => {
+  const threadId = "thread_reply_seq_004";
+  await prisma.approval.deleteMany({ where: { threadId } });
+  await prisma.processedMessage.deleteMany({ where: { threadId } });
+
+  const approval = await prisma.approval.create({
+    data: {
+      subject: "Test Email Reply Sequence",
+      body: "Body text",
+      threadId,
+      gmailThreadId: threadId,
+      nextApprover: "approvera@blauplug.com",
+      state: ApprovalState.PENDING_APPROVAL,
+      parties: {
+        create: [
+          { email: "req@blauplug.com", role: PartyRole.REQUESTER },
+          { email: "approvera@blauplug.com", role: PartyRole.APPROVER, sequenceOrder: 0 },
+          { email: "approverb@blauplug.com", role: PartyRole.APPROVER, sequenceOrder: 1 },
+        ],
+      },
+    },
+    include: { parties: true, decisions: true },
+  });
+
+  // Approver A replies "Approved: looks good"
+  const replyA = {
+    gmailMessageId: "msg_reply_a",
+    threadId,
+    messageIdHeader: "<msg_a@mail>",
+    inReplyTo: "<msg_orig@mail>",
+    references: "<msg_orig@mail>",
+    subject: "Re: Test Email Reply Sequence",
+    from: { email: "approvera@blauplug.com", name: "Approver A" },
+    to: [{ email: "monitor@blauplug.com", name: "Monitor" }],
+    cc: [],
+    date: new Date(),
+    bodyText: "Approved: looks good\n\n-- \nApprover A",
+    snippet: "Approved: looks good",
+    department: null,
+    project: null,
+    isAutoReply: false,
+    isFromMonitorInbox: false,
+  };
+
+  await handleApprovalReply(replyA);
+
+  let updated = await prisma.approval.findUnique({
+    where: { id: approval.id },
+    include: { decisions: true },
+  });
+  assert.ok(updated);
+  assert.equal(updated.state, ApprovalState.PENDING_APPROVAL);
+  assert.equal(updated.nextApprover, "approverb@blauplug.com");
+  assert.equal(updated.decisions.length, 1);
+  assert.equal(updated.decisions[0].decision, "APPROVED");
+
+  // Approver B replies "Approved: finalized"
+  const replyB = {
+    gmailMessageId: "msg_reply_b",
+    threadId,
+    messageIdHeader: "<msg_b@mail>",
+    inReplyTo: "<msg_a@mail>",
+    references: "<msg_orig@mail>",
+    subject: "Re: Test Email Reply Sequence",
+    from: { email: "approverb@blauplug.com", name: "Approver B" },
+    to: [{ email: "monitor@blauplug.com", name: "Monitor" }],
+    cc: [],
+    date: new Date(),
+    bodyText: "Approved: finalized\n\n-- \nApprover B",
+    snippet: "Approved: finalized",
+    department: null,
+    project: null,
+    isAutoReply: false,
+    isFromMonitorInbox: false,
+  };
+
+  await handleApprovalReply(replyB);
+
+  updated = await prisma.approval.findUnique({
+    where: { id: approval.id },
+    include: { decisions: true },
+  });
+  assert.ok(updated);
+  assert.equal(updated.state, ApprovalState.APPROVED);
+  assert.equal(updated.nextApprover, null);
+  assert.equal(updated.decisions.length, 2);
+
+  await prisma.approval.delete({ where: { id: approval.id } });
+  await prisma.processedMessage.deleteMany({ where: { threadId } });
+});
+

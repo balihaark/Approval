@@ -1,3 +1,6 @@
+-- Consolidated Baseline Migration for Approvals DB
+-- Matches schema.prisma (central DB employees identity + approval workflow)
+
 -- CreateEnum
 CREATE TYPE "UserRole" AS ENUM ('USER', 'ADMIN');
 
@@ -11,16 +14,28 @@ CREATE TYPE "PartyRole" AS ENUM ('REQUESTER', 'APPROVER', 'PARTICIPANT');
 CREATE TYPE "DecisionOutcome" AS ENUM ('APPROVED', 'REJECTED');
 
 -- CreateTable
-CREATE TABLE "User" (
-    "id" TEXT NOT NULL,
+CREATE TABLE "employees" (
+    "sr_no" SERIAL NOT NULL,
+    "emp_id" TEXT NOT NULL,
+    "first_name" TEXT NOT NULL,
+    "last_name" TEXT NOT NULL,
     "email" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "passwordHash" TEXT NOT NULL,
+    "phone" TEXT,
+    "designation" TEXT NOT NULL DEFAULT '',
+    "department_id" TEXT,
+    "manager_id" TEXT,
+    "dob" DATE,
+    "blood_group" TEXT,
+    "permanent_address" TEXT,
+    "local_address" TEXT,
     "role" "UserRole" NOT NULL DEFAULT 'USER',
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "tokenVersion" INTEGER NOT NULL DEFAULT 0,
+    "lastLoginAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "User_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "employees_pkey" PRIMARY KEY ("emp_id")
 );
 
 -- CreateTable
@@ -49,6 +64,7 @@ CREATE TABLE "Party" (
     "email" TEXT NOT NULL,
     "name" TEXT,
     "role" "PartyRole" NOT NULL,
+    "sequenceOrder" INTEGER,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "Party_pkey" PRIMARY KEY ("id")
@@ -118,33 +134,21 @@ CREATE TABLE "GmailSyncState" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+CREATE UNIQUE INDEX "employees_email_key" ON "employees"("email");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Approval_threadId_key" ON "Approval"("threadId");
 
 -- CreateIndex
 CREATE INDEX "Approval_state_idx" ON "Approval"("state");
-
--- CreateIndex
 CREATE INDEX "Approval_department_idx" ON "Approval"("department");
-
--- CreateIndex
 CREATE INDEX "Approval_project_idx" ON "Approval"("project");
-
--- CreateIndex
 CREATE INDEX "Approval_lastActivityAt_idx" ON "Approval"("lastActivityAt");
-
--- CreateIndex
 CREATE INDEX "Approval_createdAt_idx" ON "Approval"("createdAt");
 
 -- CreateIndex
 CREATE INDEX "Party_email_idx" ON "Party"("email");
-
--- CreateIndex
 CREATE INDEX "Party_role_idx" ON "Party"("role");
-
--- CreateIndex
 CREATE UNIQUE INDEX "Party_approvalId_email_role_key" ON "Party"("approvalId", "email", "role");
 
 -- CreateIndex
@@ -152,23 +156,15 @@ CREATE INDEX "Decision_approvalId_idx" ON "Decision"("approvalId");
 
 -- CreateIndex
 CREATE INDEX "ActivityLog_approvalId_idx" ON "ActivityLog"("approvalId");
-
--- CreateIndex
 CREATE INDEX "ActivityLog_createdAt_idx" ON "ActivityLog"("createdAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "UnprocessedMail_gmailMessageId_key" ON "UnprocessedMail"("gmailMessageId");
-
--- CreateIndex
 CREATE INDEX "UnprocessedMail_resolvedAt_idx" ON "UnprocessedMail"("resolvedAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "ProcessedMessage_gmailMessageId_key" ON "ProcessedMessage"("gmailMessageId");
-
--- CreateIndex
 CREATE INDEX "ProcessedMessage_threadId_idx" ON "ProcessedMessage"("threadId");
-
--- CreateIndex
 CREATE INDEX "ProcessedMessage_messageIdHeader_idx" ON "ProcessedMessage"("messageIdHeader");
 
 -- AddForeignKey
